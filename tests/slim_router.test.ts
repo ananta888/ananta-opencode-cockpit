@@ -77,3 +77,37 @@ describe('loop-safety regression (documented behaviour)', () => {
     for (const s of samples) expect(isRetryableFailure(s)).toBe(false)
   })
 })
+
+describe('opencode loader contract (named exports are called with the plugin context)', () => {
+  // The loader (Gy) calls the factory AND every named export with the plugin
+  // context, collects the return values in its hook list and later invokes
+  // hook.config(input). A return of undefined/null crashes that step with
+  // "plugin config hook failed" and takes the provider config down with it.
+  const ctx = { client: {}, directory: '/tmp', worktree: '/tmp' } as any
+  const badInputs = [ctx, undefined, null, 42, {}, [] as any]
+
+  test('resetDelayMs never throws and never returns undefined/null on loader input', () => {
+    for (const bad of badInputs) {
+      expect(() => resetDelayMs(bad as any)).not.toThrow()
+      const r = resetDelayMs(bad as any)
+      expect(r).not.toBeUndefined()
+      expect(r).not.toBeNull()
+    }
+  })
+  test('isRetryableFailure never throws and never returns undefined/null on loader input', () => {
+    for (const bad of badInputs) {
+      expect(() => isRetryableFailure(bad as any)).not.toThrow()
+      const r = isRetryableFailure(bad as any)
+      expect(r).not.toBeUndefined()
+      expect(r).not.toBeNull()
+    }
+    expect(isRetryableFailure(ctx)).toBe(false)
+  })
+  test('cooldownMs never throws and returns a finite number on loader input', () => {
+    for (const bad of badInputs) {
+      expect(() => cooldownMs(bad as any, bad as any)).not.toThrow()
+      const r = cooldownMs(bad as any, bad as any)
+      expect(Number.isFinite(r)).toBe(true)
+    }
+  })
+})

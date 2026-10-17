@@ -39,7 +39,12 @@ const iso = () => new Date().toISOString()
 const userHome = () => process.env.HOME || homedir()
 
 // Recognise explicit reset/retry windows without blindly retrying during a quota lock.
+// Guard: the OpenCode plugin loader invokes named exports with the plugin context (or no
+// argument) and collects the return values in its hook list. A return of undefined/null
+// makes the loader crash later ("plugin config hook failed"). Non-string input therefore
+// returns 0 = "no explicit reset window"; the string path is unchanged for real callers.
 export const resetDelayMs = (raw:string):number|undefined => {
+  if (typeof raw !== 'string') return 0
   const text=raw.toLowerCase()
   const sections=text.match(/(?:reset|retry(?:ing)?|available)[^\n]{0,95}/g) ?? []
   for (const part of sections) {
@@ -56,7 +61,9 @@ const NON_RETRYABLE = /context (size|length|window)|too (many|long) tokens|maxim
 const HTTP_RETRYABLE = /(?:status(?:code)?|http)[^\d]{0,6}(?:429|500|502|503|504|529)(?!\d)/
 
 // Deterministic failure classification; no LLM call.
+// Guard: same loader contract as resetDelayMs – a non-string raw is not a failure.
 export const isRetryableFailure = (raw:string, patterns: readonly string[] = defaults.retryable_patterns):boolean => {
+  if (typeof raw !== 'string') return false
   const s=raw.toLowerCase()
   if (NON_RETRYABLE.test(s)) return false
   return patterns.some(p=>s.includes(p.toLowerCase())) || HTTP_RETRYABLE.test(s)
@@ -64,6 +71,8 @@ export const isRetryableFailure = (raw:string, patterns: readonly string[] = def
 
 // Cooldown for a failed model: explicit provider reset time wins, else capped exponential backoff.
 export const cooldownMs = (failures:number, raw:string, cfg:{cooldown_seconds:number;failback_backoff_factor:number;failback_max_cooldown_seconds:number} = defaults):number => {
+  if (typeof cfg?.cooldown_seconds !== 'number') cfg = defaults
+  if (typeof failures !== 'number' || !Number.isFinite(failures)) failures = 1
   const baseMs=cfg.cooldown_seconds*1000
   const escalating=baseMs*Math.pow(cfg.failback_backoff_factor,Math.min(Math.max(failures-1,0),8))
   const explicit=resetDelayMs(raw)

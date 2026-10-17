@@ -20,6 +20,7 @@ fi
 echo
 echo "########## Bash-Regression ##########"
 bash "$HERE/test_install.sh" || FAIL=1
+bash "$HERE/test_up.sh" || FAIL=1
 
 echo
 if [ "$FAIL" = 0 ]; then

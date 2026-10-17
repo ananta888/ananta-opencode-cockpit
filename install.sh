@@ -101,9 +101,10 @@ echo "Installiert nach: $SHARE"
 echo "Aufruf:           $BIN/ananta-cockpit"
 echo "Backups:          $BACKUP"
 echo
-echo 'Start in tmux:  tmux new -s ananta   # falls nicht bereits in tmux'
-echo '                ananta-cockpit start ~/ananta'
-echo 'Stop:           ananta-cockpit stop'
-echo "PATH-Hinweis:   export PATH=\"\$HOME/.local/bin:\$PATH\""
+echo 'Alles-in-einem:   ananta-cockpit up ~/projekt    # tmux + Cockpit + OpenCode (MCP)'
+echo 'Nur Cockpit:      tmux new -s ananta   # falls nicht bereits in tmux'
+echo '                  ananta-cockpit start ~/ananta'
+echo 'Stop:             ananta-cockpit stop'
+echo "PATH-Hinweis:     export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo 'Plugin-Aenderungen wirken nach OpenCode-Neustart.'
-echo 'Deinstallation: bash uninstall.sh'
+echo 'Deinstallation:   bash uninstall.sh'

@@ -39,6 +39,25 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ## Start und Stop
 
+Alles-in-einem (empfohlen): tmux-Session + Cockpit-Statusleiste/Sidebar +
+OpenCode mit CodeCompass-MCP und den eigenen OpenCode-Plugins:
+
+```bash
+ananta-cockpit up ~/ananta                 # Session wird angelegt/betreten
+ananta-cockpit up ~/ananta -m prov/modell  # mit Modell-Vorauswahl
+ananta-cockpit up ~/ananta --detach        # Hintergrund (tmux attach -t <name>)
+ananta-cockpit up ~/ananta --no-mcp        # ohne Hub-MCP
+ananta-cockpit up ~/ananta --dry-run       # nur anzeigen, nichts ausfuehren
+```
+
+- Session-Name = Projektname (`-s NAME` zum Ueberschreiben); idempotent:
+  ein erneuter Aufruf betritt die laufende Session.
+- Fehlt ein Hub-Token, wird der interaktive Login angeboten; ohne gueltiges
+  Token startet OpenCode trotzdem (ohne MCP, mit Hinweis).
+- Nach dem Verlassen von OpenCode bleibt eine Shell in der Session aktiv.
+
+Manuell (Cockpit ohne OpenCode-Start):
+
 ```bash
 tmux new -s ananta          # falls noch keine tmux-Sitzung
 cd ~/ananta && opencode     # OpenCode im linken Bereich
@@ -54,7 +73,7 @@ ananta-cockpit stop
 
 ## Bedienung
 
-Obere Menueleiste (Mausklick) und rechtes Panel (Maus oder Tasten 1–7):
+Obere Menueleiste (Mausklick) und rechtes Panel (Maus oder Tasten 1–8):
 
 | Taste | Bereich | Inhalt |
 |---|---|---|
@@ -146,12 +165,16 @@ Konfiguration: `~/.config/opencode/slim-router.json`, Zustand:
 bash tests/run-tests.sh
 ```
 
-- 33 Python-Tests (unittest): tmux-Start/Idempotenz/Stop, echte tmux-Integration,
-  oc-side-Forkerfassung, side-sync Cursor/Duplikatschutz, slim-plan.
-- 20 Bun-Tests: Reset-Fenster-Parsing, Fehlerklassifikation, Cooldowns,
-  Verhaltenstests gegen einen Mock-Client (keine echten API-Aufrufe).
-- 25 Bash-Regressionen: Installation/Idempotenz/Deinstallation in Fake-HOME,
-  Klick-Bereiche, Plugin-Export, `plugin:["list"]`-Regression, Geheimnisscan.
+- 41 Python-Tests (unittest): tmux-Start/Idempotenz/Stop, echte tmux-Integration,
+  oc-codecompass (Mock-Hub), oc-side-Forkerfassung, side-sync Cursor/
+  Duplikatschutz, slim-plan.
+- 23 Bun-Tests: Reset-Fenster-Parsing, Fehlerklassifikation, Cooldowns,
+  Verhaltenstests gegen einen Mock-Client, Loader-Vertrag der benannten
+  Exporte (keine echten API-Aufrufe).
+- 68 Bash-Regressionen: Installation/Idempotenz/Deinstallation in Fake-HOME,
+  Klick-Bereiche, Plugin-Export, `plugin:["list"]`-Regression, Geheimnisscan
+  (test_install.sh) sowie `up`-Argumente/Dry-Run/echtes tmux-E2E mit Stubs
+  (test_up.sh).
 
 **Manuelle Pruefschritte (nicht automatisiert):**
 
@@ -170,6 +193,9 @@ bash tests/run-tests.sh
 10. `oc-codecompass run -- mcp list` – der Server `ananta_codecompass` muss
     `connected` zeigen.
 11. Menue 7 (CodeCompass) -> `t`: Tool-Liste erscheint.
+12. `ananta-cockpit up <projekt>` in einem echten Terminal: Session, Sidebar,
+    Statusleiste und OpenCode muessen zusammenkommen; `--dry-run` vorher
+    gegenlesen.
 
 ## Verifiziert / nicht verifiziert
 
@@ -179,7 +205,12 @@ bash tests/run-tests.sh
   zwei realen Sitzungen, ohne LLM-Aufruf; CodeCompass-Anbindung gegen den
   laufenden Ananta-Hub: `opencode mcp list` = connected und ein echter
   `tools/call` auf `codecompass.retrieve` liefert Retrieval-Ergebnisse
-  (Budget-/Dedup-Diagnostik), ohne LLM-Aufruf.
+  (Budget-/Dedup-Diagnostik), ohne LLM-Aufruf; **Alles-in-einem-Start
+  `ananta-cockpit up`**: echte tmux-Session mit Sidebar/Statusleiste, das
+  laufende OpenCode-TUI traegt die MCP-Injection (`ananta_codecompass` +
+  Bearer im Prozess-Env, TUI zeigt "3 MCP"), `slim-router`/`context-manager`
+  laden fehlerfrei (OpenCode-Loader-Vertrag getestet); Plugin-Ladefehler
+  (`failed to load plugin`/`config hook failed`) sind behoben.
 - **Nicht end-to-end getestet**: echte Mausklicks in einem angeklemmten Client
   (benötigt interaktives Terminal), Context-Compaction-Hook mit echtem
   `/compact`, Router-Failback gegen echte Providerfehler ausserhalb der bisher

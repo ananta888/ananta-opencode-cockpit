@@ -6,7 +6,161 @@ ROOT="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/ananta-cockpit"
 mkdir -p "$STATE"
 
+usage() {
+  cat <<EOF
+Ananta Cockpit:
+  up [Projektpfad] [-m MOD] [-s SESSION] [--no-mcp] [--dry-run] [--detach]
+     Alles-in-einem: tmux-Session + Cockpit-Statusleiste/Sidebar + OpenCode
+     mit CodeCompass-MCP und eigenen OpenCode-Plugins. Idempotent.
+  start [Projektpfad]            nur Cockpit (in laufender tmux-Session)
+  stop                           Cockpit entfernen, Optionen wiederherstellen
+  action <side|sessions|models|plans|sync|router|codecompass|logs>
+                                 Einzelne Aktion (Menuepunkt) ausfuehren
+  help                           diese Hilfe
+EOF
+}
+
+cmd_up() {
+  local project='' model='' session='' no_mcp=0 dry=0 detach=0 pane_mode=0
+  local -a run_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -m|--model)
+        [[ $# -ge 2 ]] || { echo 'up: --model braucht einen Wert' >&2; exit 2; }
+        model="$2"; shift 2 ;;
+      -s|--session)
+        [[ $# -ge 2 ]] || { echo 'up: --session braucht einen Wert' >&2; exit 2; }
+        session="$2"; shift 2 ;;
+      --no-mcp) no_mcp=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      --detach) detach=1; shift ;;
+      --pane) pane_mode=1; shift ;;   # intern: Session wurde von "up" erzeugt
+      -h|--help) usage; exit 0 ;;
+      -*) echo "up: unbekannte Option: $1 (Hilfe: ananta-cockpit help)" >&2; exit 2 ;;
+      *)
+        if [[ -n "$project" ]]; then
+          echo 'up: nur ein Projektverzeichnis erlaubt' >&2; exit 2
+        fi
+        project="$1"; shift ;;
+    esac
+  done
+
+  project="${project:-$PWD}"
+  if [[ ! -d "$project" ]]; then
+    echo "up: kein Verzeichnis: $project" >&2
+    exit 2
+  fi
+  project="$(cd -- "$project" && pwd)"
+
+  if [[ -z "$session" ]]; then
+    session="$(basename -- "$project" | tr -c 'A-Za-z0-9_-' '-' | sed -e 's/-*$//' -e 's/^-*//' )"
+    session="${session:-ananta}"
+  fi
+
+  if [[ -n "$model" ]]; then
+    run_args+=(--model "$model")
+  fi
+
+  # --- ausserhalb von tmux: Session anlegen oder betreten --------------------
+  if [[ -z "${TMUX:-}" ]]; then
+    local inner detach_flag=''
+    inner="$(printf '%q ' "$ROOT/cockpit" up "$project" --pane)"
+    if [[ -n "$model" ]]; then
+      inner+="$(printf '%q ' --model "$model")"
+    fi
+    if [[ "$no_mcp" -eq 1 ]]; then
+      inner+="$(printf '%q ' --no-mcp)"
+    fi
+    [[ "$detach" -eq 1 ]] && detach_flag='-d '
+    if [[ "$dry" -eq 1 ]]; then
+      echo "[Dry-Run] tmux new-session -A ${detach_flag}-s $session -c $project $inner"
+      return 0
+    fi
+    if [[ "$detach" -eq 1 ]]; then
+      # Kein -A: bei existenter Session ist -A ein ATTACH (braucht ein TTY).
+      if tmux has-session -t "=$session" 2>/dev/null; then
+        echo "Session '$session' laeuft bereits (tmux attach -t $session)."
+        return 0
+      fi
+      exec tmux new-session -d -s "$session" -c "$project" "$inner"
+    fi
+    exec tmux new-session -A -s "$session" -c "$project" "$inner"
+  fi
+
+  # --- innerhalb von tmux ----------------------------------------------------
+  if [[ "$dry" -eq 1 ]]; then
+    local args_hint=''
+    [[ ${#run_args[@]} -gt 0 ]] && args_hint="${run_args[*]} "
+    echo "[Dry-Run] Cockpit: tmux_setup start (Sidebar + Statusleiste) fuer $project"
+    if [[ "$no_mcp" -eq 1 ]]; then
+      echo "[Dry-Run] OpenCode: opencode ${args_hint}$project"
+    else
+      echo "[Dry-Run] Token-Check (oc-codecompass status; ggf. interaktiver Login)"
+      echo "[Dry-Run] OpenCode mit MCP: oc-codecompass run ${args_hint}$project"
+    fi
+    if [[ "$pane_mode" -eq 1 ]]; then
+      echo "[Dry-Run] danach: Shell bleibt aktiv (von up erzeugte Session)"
+    else
+      echo '[Dry-Run] danach: Rueckkehr in die aufrufende Shell'
+    fi
+    return 0
+  fi
+
+  python3 "$ROOT/tmux_setup.py" start "$ROOT" "$project" "$STATE"
+
+  local use_cc=0 final_rc=0
+  if [[ "$no_mcp" -eq 0 ]] && command -v oc-codecompass >/dev/null 2>&1; then
+    local rc=0
+    oc-codecompass status >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" -eq 3 ]]; then
+      echo 'CodeCompass: kein gueltiges Token – Hub-Login:'
+      oc-codecompass login || true
+      rc=0
+      oc-codecompass status >/dev/null 2>&1 || rc=$?
+    fi
+    if [[ "$rc" -eq 0 ]]; then
+      use_cc=1
+    elif [[ "$rc" -eq 3 ]]; then
+      echo 'Hinweis: kein gueltiges Token – starte ohne MCP (erneut: oc-codecompass login).' >&2
+    elif [[ "$rc" -eq 4 ]]; then
+      echo 'Hinweis: MCP-Exposure auf dem Hub deaktiviert – starte ohne MCP.' >&2
+    else
+      echo "Hinweis: Hub nicht erreichbar (rc=$rc) – starte ohne MCP." >&2
+    fi
+  elif [[ "$no_mcp" -eq 0 ]]; then
+    echo 'Hinweis: oc-codecompass nicht installiert – starte ohne MCP.' >&2
+  fi
+
+  if [[ "$use_cc" -eq 1 ]]; then
+    echo "Starte OpenCode MIT CodeCompass-MCP (Projekt: $project)"
+    local occ_rc=0
+    oc-codecompass run "${run_args[@]}" "$project" || occ_rc=$?
+    if [[ "$occ_rc" -eq 3 || "$occ_rc" -eq 4 ]]; then
+      echo "Hinweis: MCP-Start fehlgeschlagen (rc=$occ_rc) – starte ohne MCP." >&2
+      use_cc=0
+      final_rc=0
+    else
+      final_rc=$occ_rc
+    fi
+  fi
+
+  if [[ "$use_cc" -eq 0 ]]; then
+    echo "Starte OpenCode (Projekt: $project)"
+    opencode "${run_args[@]}" "$project" || final_rc=$?
+  fi
+
+  if [[ "$pane_mode" -eq 1 ]]; then
+    # Von "up" erzeugte Session: Pane am Leben halten, bis der Nutzer sie schliesst.
+    exec "${SHELL:-/bin/bash}" -l
+  fi
+  return "$final_rc"
+}
+
 case "${1:-help}" in
+  up)
+    shift
+    cmd_up "$@"
+    ;;
   start)
     if [[ -z "${TMUX:-}" ]]; then
       echo 'Bitte zuerst in tmux wechseln: tmux new -s ananta'; exit 2
@@ -23,5 +177,11 @@ case "${1:-help}" in
   sidebar)
     exec python3 "$ROOT/sidebar.py" "${2:-$PWD}" "$ROOT"
     ;;
-  *) echo 'Ananta Cockpit: ananta-cockpit start [Projektpfad] | stop | action <side|sessions|models|plans|sync|router|codecompass|logs|help>';;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
 esac
