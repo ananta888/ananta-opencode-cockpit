@@ -3,12 +3,15 @@ set -euo pipefail
 
 usage() {
 cat <<'TXT'
-oc-side --session SESSION_ID [--model PROVIDER/MODEL] [--dir PROJECT] [--width 90] [--height 90] [--codecompass]
+oc-side --session SESSION_ID [--resume] [--layout popup|left|below] [--target PANE] [--model PROVIDER/MODEL] [--dir PROJECT] [--width 90] [--height 90] [--codecompass] [--inline]
 
 Creates a forked OpenCode session in a tmux popup, leaving the parent TUI
 and its conversation untouched. Requires tmux >= 3.2 and running inside tmux.
 --codecompass starts the fork via oc-codecompass run: the Ananta-Hub MCP
 endpoint (CodeCompass tools) is injected into the side session.
+--inline uses the current terminal (for callers already inside a tmux popup).
+--resume continues the supplied session without creating another fork.
+--layout left/below embeds the chat beside/below the cockpit main pane.
 
 Forks created through this tool are recorded in
 ~/.local/state/ananta-cockpit/side-chats.json so the cockpit can list and
@@ -18,7 +21,8 @@ Example:
   oc-side --session ses_xxx --model xiaomi-token-plan-ams/mimo-v2.6-flash
 TXT
 }
-SESSION=""; MODEL=""; DIR="$PWD"; WIDTH=90; HEIGHT=90; CODECOMPASS=0
+SESSION=""; MODEL=""; DIR="$PWD"; WIDTH=90; HEIGHT=90; CODECOMPASS=0; INLINE=0
+RESUME=0; LAYOUT=popup; TARGET=''
 while (($#)); do
  case "$1" in
   --session) SESSION="${2:?missing session ID}"; shift 2;;
@@ -27,15 +31,29 @@ while (($#)); do
   --width) WIDTH="${2:?missing width}"; shift 2;;
   --height) HEIGHT="${2:?missing height}"; shift 2;;
   --codecompass) CODECOMPASS=1; shift;;
+  --inline) INLINE=1; shift;;
+  --resume) RESUME=1; shift;;
+  --layout) LAYOUT="${2:?missing layout}"; shift 2;;
+  --target) TARGET="${2:?missing target pane}"; shift 2;;
   -h|--help) usage; exit 0;;
   *) echo "Unknown option: $1" >&2; usage >&2; exit 2;;
  esac
 done
+case "$LAYOUT" in popup|left|below) ;; *) echo 'Layout must be popup, left or below.' >&2; exit 2;; esac
+if ((INLINE)) && [[ "$LAYOUT" != popup ]]; then
+  echo '--inline cannot be combined with a pane layout.' >&2; exit 2
+fi
+if [[ -n "$TARGET" && ! "$TARGET" =~ ^%[0-9]+$ ]]; then
+  echo 'Target must be a tmux pane ID (%number).' >&2; exit 2
+fi
 if ((CODECOMPASS)); then
   command -v oc-codecompass >/dev/null || { echo 'oc-codecompass not found. Run the cockpit install.sh first.' >&2; exit 1; }
 fi
 [[ "$SESSION" =~ ^ses_[A-Za-z0-9_-]+$ ]] || { echo 'Please supply --session ses_... of the current MAIN session.' >&2; exit 2; }
 [[ -d "$DIR" ]] || { echo "Project directory does not exist: $DIR" >&2; exit 2; }
+if [[ -n "$MODEL" && "$MODEL" != */* ]]; then
+  echo 'Model must be PROVIDER/MODEL.' >&2; exit 2
+fi
 [[ "$WIDTH" =~ ^[0-9]+$ && "$HEIGHT" =~ ^[0-9]+$ ]] || { echo 'Popup sizes must be integer percentages.' >&2; exit 2; }
 ((WIDTH>=30 && WIDTH<=100 && HEIGHT>=30 && HEIGHT<=100)) || { echo 'Popup sizes must be 30..100.' >&2; exit 2; }
 command -v tmux >/dev/null || { echo 'tmux not found. Install with: sudo apt install tmux' >&2; exit 1; }
@@ -46,26 +64,62 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ananta-cockpit"
 SIDE_LOG="$STATE_DIR/side-chats.json"
 mkdir -p "$STATE_DIR"
 
-list_sessions() { opencode session list 2>/dev/null | grep -oE 'ses_[A-Za-z0-9_-]+' | sort -u || true; }
-BEFORE="$(list_sessions)"
+if [[ "$LAYOUT" != popup ]]; then
+  if [[ -z "$TARGET" ]]; then
+    fallback=''
+    pane_args=()
+    [[ -n "${TMUX_PANE:-}" ]] && pane_args=(-t "$TMUX_PANE")
+    while IFS='|' read -r pane main control; do
+      if [[ "$control" != 1 ]]; then
+        [[ -z "$fallback" ]] && fallback="$pane"
+        [[ "$main" == 1 ]] && TARGET="$pane"
+      fi
+    done < <(tmux list-panes "${pane_args[@]}" -F '#{pane_id}|#{@ananta_main}|#{@ananta_cockpit}')
+    TARGET="${TARGET:-$fallback}"
+    [[ -z "$TARGET" ]] || tmux set-option -p -t "$TARGET" '@ananta_main' 1
+  fi
+  [[ -n "$TARGET" ]] || { echo 'Kein Haupt-Pane gefunden.' >&2; exit 1; }
+  CHILD=(bash "$(readlink -f -- "${BASH_SOURCE[0]}")" --inline --session "$SESSION" --dir "$DIR")
+  ((RESUME)) && CHILD+=(--resume)
+  ((CODECOMPASS)) && CHILD+=(--codecompass)
+  [[ -n "$MODEL" ]] && CHILD+=(--model "$MODEL")
+  printf -v CMD '%q ' "${CHILD[@]}"
+  CMD+='; rc=$?; if [ "$rc" -ne 0 ]; then printf "\nEnter zum Schliessen ..."; read answer; fi; exit "$rc"'
+  SPLIT=(-v -l '40%')
+  [[ "$LAYOUT" == left ]] && SPLIT=(-h -b -l '50%')
+  pane=$(tmux split-window "${SPLIT[@]}" -t "$TARGET" -c "$DIR" -P -F '#{pane_id}' "$CMD")
+  echo "Side-Chat als Pane $pane geoeffnet. Ctrl+B und Pfeiltasten wechseln das Pane."
+  exit 0
+fi
 
-# tmux executes a shell command string; use printf %q to quote every argument.
+list_sessions() { opencode session list 2>/dev/null | grep -oE 'ses_[A-Za-z0-9_-]+' | sort -u || true; }
+BEFORE=''
+((RESUME)) || BEFORE="$(list_sessions)"
+
 if ((CODECOMPASS)); then
-  printf -v CMD 'cd %q && exec oc-codecompass run -- --session %q --fork' "$DIR" "$SESSION"
+  RUN=(oc-codecompass run -- --session "$SESSION")
 else
-  printf -v CMD 'cd %q && exec opencode --session %q --fork' "$DIR" "$SESSION"
+  RUN=(opencode --session "$SESSION")
 fi
+((RESUME)) || RUN+=(--fork)
 if [[ -n "$MODEL" ]]; then
- [[ "$MODEL" == */* ]] || { echo 'Model must be PROVIDER/MODEL.' >&2; exit 2; }
- printf -v QM '%q' "$MODEL"
- CMD+=" --model $QM"
+ RUN+=(--model "$MODEL")
 fi
-# display-popup -E closes popup when the forked OpenCode exits.
-tmux display-popup -E -w "${WIDTH}%" -h "${HEIGHT}%" -T 'OpenCode SIDE (exit to return)' "$CMD"
+RUN_RC=0
+if ((INLINE)); then
+  (cd -- "$DIR" && "${RUN[@]}") || RUN_RC=$?
+else
+  printf -v CMD '%q ' "${RUN[@]}"
+  tmux display-popup -EE -d "$DIR" -w "${WIDTH}%" -h "${HEIGHT}%" \
+    -T 'OpenCode SIDE (Esc to close)' "$CMD" || RUN_RC=$?
+fi
 
 # Nach dem Schliessen: neu entstandene Forks protokollieren (optional aufraeumbar).
-AFTER="$(list_sessions)"
-NEW="$(comm -13 <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | grep -E '^ses_' || true)"
+NEW=''
+if ((!RESUME)); then
+  AFTER="$(list_sessions)"
+  NEW="$(comm -13 <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | grep -E '^ses_' || true)"
+fi
 if [[ -n "$NEW" ]]; then
   # IDs aus der Shell an die Persistenz uebergeben.
   NEW_IDS="$NEW" PARENT="$SESSION" MODEL="$MODEL" LOGFILE="$SIDE_LOG" python3 - <<'PY'
@@ -89,3 +143,7 @@ os.replace(tmp, path)
 print('Side-chat recorded:', ', '.join(new_ids))
 PY
 fi
+if ((RUN_RC)); then
+  echo "Side-Chat fehlgeschlagen (Exit $RUN_RC). Die Fehlermeldung steht oben." >&2
+fi
+exit "$RUN_RC"

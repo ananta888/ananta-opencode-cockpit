@@ -1,151 +1,49 @@
 #!/usr/bin/env python3
 """Ananta Cockpit – Aktions-Popups. Alle Aktionen sind read-only oder explizit bestaetigt."""
 import json
+import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
+from selection import Choice, pick
+from commands import confirm, list_sessions, pick_model, pick_session, run, run_capture, session_choices
+from side_chats import manage_side_chats
 
 action, project, root = sys.argv[1:4]
 project = str(Path(project).expanduser().resolve())
-SESSION_RE = re.compile(r'^ses_[A-Za-z0-9_-]+$')
+os.chdir(project)
 
 
 def pause(msg='\nEnter zum Schliessen ...'):
+    print('\nText markieren: Shift + Maus ziehen; kopieren: Ctrl+Shift+C; einfuegen: Ctrl+Shift+V.')
     try:
         input(msg)
     except EOFError:
         pass
 
 
-def run(argv, cwd=None):
-    try:
-        return subprocess.run(argv, cwd=cwd or project, check=False, text=True,
-                              capture_output=False)
-    except FileNotFoundError:
-        print('Befehl nicht vorhanden:', argv[0])
-        return None
-
-
-def run_capture(argv, cwd=None):
-    try:
-        p = subprocess.run(argv, cwd=cwd or project, check=False, text=True,
-                           capture_output=True)
-        return (p.stdout or '') + (p.stderr or '')
-    except FileNotFoundError:
-        return ''
-
-
-def choose(prompt):
-    try:
-        return input(prompt).strip()
-    except EOFError:
-        return ''
-
-
-def confirm(prompt, expected='JA'):
-    val = choose(f'{prompt} [ja/NEIN]: ').strip().lower()
-    return val in ('ja', 'j', expected.lower())
-
-
-def list_sessions():
-    """Liefert Liste von Session-IDs aus `opencode session list`."""
-    out = run_capture(['opencode', 'session', 'list'])
-    ids = re.findall(r'ses_[A-Za-z0-9_-]+', out)
-    return list(dict.fromkeys(ids)), out
-
-
-def valid_session(sid, known):
-    return bool(SESSION_RE.fullmatch(sid or '')) and (not known or sid in known)
-
-
 print(f'\n  ANANTA COCKPIT  /  {action.upper()}\n  Projekt: {project}\n')
 
 if action == 'side':
-    state_dir = Path.home() / '.local/state/ananta-cockpit'
-    side_log = state_dir / 'side-chats.json'
-    recorded = []
-    if side_log.exists():
-        try:
-            recorded = json.loads(side_log.read_text())
-        except Exception:
-            recorded = []
-
-    print('Side-Chat: Fork einer Hauptsitzung in einem Popup.')
-    print('  o = Side-Chat oeffnen   c = temporaere Side-Chats aufraeumen   Enter = Abbrechen')
-    if recorded:
-        print(f'\nErfasste Side-Chats ({len(recorded)}):')
-        for i, e in enumerate(recorded, 1):
-            print(f"  {i}. {e.get('id')}  (von {e.get('parent','?')}, {e.get('created','')[:16]})")
-    mode = choose('\nAuswahl [o/c/Enter]: ').lower()
-    if mode == 'c':
-        if not recorded:
-            print('Keine erfassten Side-Chats vorhanden.')
-        else:
-            ids, out = list_sessions()
-            print()
-            targets = choose('Aufraeumen: Nummern (z.B. 1,2), "all" oder Enter=Abbrechen: ').lower()
-            selected = []
-            if targets == 'all':
-                selected = [e for e in recorded if e.get('id') in ids]
-            else:
-                for tok in targets.replace(',', ' ').split():
-                    if tok.isdigit() and 1 <= int(tok) <= len(recorded):
-                        e = recorded[int(tok) - 1]
-                        if e.get('id') in ids:
-                            selected.append(e)
-            if not selected:
-                print('Nichts ausgewaehlt (nur existierende Sitzungen sind loeschbar).')
-            else:
-                print(f'\nFolgende Side-Chats werden GELÖSCHT: {", ".join(e["id"] for e in selected)}')
-                if confirm('Endgueltig loeschen?'):
-                    for e in selected:
-                        r = run_capture(['opencode', 'session', 'delete', e['id']])
-                        print(f"  {e['id']}: {r.strip() or 'geloescht'}")
-                    remaining = [e for e in recorded if e not in selected]
-                    side_log.write_text(json.dumps(remaining, indent=2) + '\n')
-                else:
-                    print('Nichts geloescht.')
-    elif mode == 'o' or mode == '':
-        if mode == '':
-            print('Abgebrochen.')
-        else:
-            ids, out = list_sessions()
-            print(out if out.strip() else '(keine Sitzungen gefunden – ist OpenCode gestartet?)')
-            if not ids:
-                print('Keine gueltigen Sitzungs-IDs verfuegbar.')
-            else:
-                session = choose('\nHauptsitzungs-ID: ')
-                if not session:
-                    print('Abgebrochen.')
-                elif not valid_session(session, ids):
-                    print(f'Ungueltige oder unbekannte Session-ID: {session}')
-                else:
-                    model = choose('Modell [xiaomi-token-plan-ams/mimo-v2.6-flash]: ') or \
-                        'xiaomi-token-plan-ams/mimo-v2.6-flash'
-                    use_cc = choose('Mit CodeCompass-MCP starten? [j/N]: ').lower() in ('j', 'ja', 'y')
-                    if shutil.which('oc-side'):
-                        argv = ['oc-side', '--session', session, '--dir', project, '--model', model]
-                        if use_cc and shutil.which('oc-codecompass'):
-                            argv.append('--codecompass')
-                        print(f'Starte Side-Chat fuer {session} mit {model} ...')
-                        run(argv)
-                    else:
-                        print('oc-side nicht installiert. Alternative im OpenCode-TUI: /fork')
-                        print('CLI-Variante: opencode --session', session, '--fork')
-    else:
-        print('Abgebrochen.')
+    if manage_side_chats(project):
+        sys.exit(0)
 
 elif action == 'sessions':
     ids, out = list_sessions()
-    print(out if out.strip() else '(keine Sitzungen gefunden)')
     if ids:
-        print('\nGefundene IDs:', ', '.join(ids))
+        session = pick('Sitzungen durchsuchen', session_choices(ids, out))
+        if session:
+            print('Ausgewaehlte Sitzung:', session)
+    else:
+        print('(keine Sitzungen gefunden)')
 
 elif action == 'models':
-    print('Verfuegbare Modelle (laeuft keine Aenderung der laufenden Sitzung):\n')
-    run(['opencode', 'models'])
+    out = run_capture(['opencode', 'models'])
+    models = [line.strip() for line in out.splitlines()
+              if re.fullmatch(r'[^\s/]+/[^\s]+', line.strip())]
+    model = pick('Modelle durchsuchen (nur Anzeige)', [Choice(model, model) for model in models])
+    print(f'Modell: {model}' if model else 'Keine Auswahl. Die laufende Sitzung bleibt unveraendert.')
 
 elif action == 'plans':
     if shutil.which('slim-plan'):
@@ -165,17 +63,20 @@ elif action == 'codecompass':
         print('oc-codecompass ist nicht installiert. Bitte install.sh erneut ausfuehren.')
     else:
         print('CodeCompass ueber den Ananta-Hub-MCP-Endpunkt.')
-        print('  s = Status    t = Tools    o = OpenCode mit CodeCompass starten    Enter = Abbrechen')
-        mode = choose('\nAuswahl [s/t/o/Enter]: ').lower()
+        mode = pick('CodeCompass', [Choice('s', 'Hub-Status anzeigen'),
+                                    Choice('t', 'Tools anzeigen'),
+                                    Choice('o', 'OpenCode mit CodeCompass starten')])
         if mode == 's':
             run([occ, 'status'])
         elif mode == 't':
             run([occ, 'tools'])
         elif mode == 'o':
-            model = choose('Modell [xiaomi-token-plan-ams/mimo-v2.6-flash]: ') or \
-                'xiaomi-token-plan-ams/mimo-v2.6-flash'
-            print('Starte OpenCode mit CodeCompass-MCP (Beenden wie ueblich)...')
-            run([occ, 'run', '--model', model])
+            model = pick_model()
+            if model:
+                print('Starte OpenCode mit CodeCompass-MCP (Beenden wie ueblich)...')
+                run([occ, 'run', '--model', model])
+            else:
+                print('Abgebrochen.')
         else:
             print('Abgebrochen.')
 
@@ -232,18 +133,15 @@ elif action == 'router':
         print('  keine Datei – noch keine Fehler aufgezeichnet.')
 
 elif action == 'sync':
-    ids, out = list_sessions()
-    print(out if out.strip() else '(keine Sitzungen gefunden)')
     if not shutil.which('oc-side-sync'):
         print('oc-side-sync ist nicht installiert. Bitte install.sh erneut ausfuehren.')
     else:
-        main = choose('Hauptsitzungs-ID: ')
-        side = choose('Side-Sitzungs-ID: ')
-        direction = choose('Richtung [main-to-side/side-to-main]: ') or 'main-to-side'
-        if not (valid_session(main, ids) and valid_session(side, ids) and main != side):
-            print('Abbruch: zwei verschiedene, gueltige Sitzungs-IDs erforderlich.')
-        elif direction not in ('main-to-side', 'side-to-main'):
-            print('Abbruch: ungueltige Richtung.')
+        main = pick_session('Hauptsitzung fuer den Kontext-Sync waehlen')
+        side = pick_session('Side-Sitzung waehlen', excluded=main) if main else None
+        direction = pick('Sync-Richtung', [Choice('main-to-side', 'Hauptsitzung -> Side-Sitzung'),
+                                           Choice('side-to-main', 'Side-Sitzung -> Hauptsitzung')]) if side else None
+        if not main or not side or not direction:
+            print('Abgebrochen.')
         else:
             print('\n--- VORSCHAU (es wurde nichts uebertragen) ---\n')
             run(['oc-side-sync', 'preview', '--main', main, '--side', side,
@@ -255,9 +153,8 @@ elif action == 'sync':
                 print('Nicht uebernommen.')
 
 elif action == 'help':
-    print('Menueleiste oben anklicken oder im Panel 1–8 druecken.')
-    print('  1 Side-Chat   2 Sessions   3 Modelle   4 Plaene')
-    print('  5 Sync        6 Router     7 CodeCompass   8 Logs')
+    print('Menueleiste oben anklicken oder Prefix g + Menuebuchstabe (p/c/k/a/m/w/h).')
+    print('Chats: Tabs in der Statusleiste oder das Chat-Baum-Panel rechts.')
     print('q beendet das Panel. Ctrl+B + Pfeile wechseln das Pane.')
 else:
     print('Unbekannte Aktion:', action)

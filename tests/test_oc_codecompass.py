@@ -63,7 +63,8 @@ class MockHub(BaseHTTPRequestHandler):
                 return self._json(401, {'message': 'unauthorized'})
             method = body.get('method')
             if method == 'ping':
-                return self._json(200, {'jsonrpc': '2.0', 'id': body.get('id'), 'result': {}})
+                return self._json(MockHub.state.get('ping_status', 200),
+                                  {'jsonrpc': '2.0', 'id': body.get('id'), 'result': {}})
             if method == 'tools/list':
                 return self._json(200, {'jsonrpc': '2.0', 'id': body.get('id'),
                                         'result': {'tools': [
@@ -110,16 +111,78 @@ class OcCodecompass(unittest.TestCase):
         return json.loads(p.read_text()) if p.exists() else None
 
     def test_rejects_remote_hub_url(self):
-        (self.tmp / '.config/ananta-cockpit/codecompass.json').write_text(
-            json.dumps({'hub_url': 'http://evil.example:5000'}))
+        config = self.tmp / '.config/ananta-cockpit/codecompass.json'
         try:
-            r = self.run_cli('status')
-            self.assertEqual(r.returncode, 2)
-            self.assertIn('127.0.0.1', r.stderr)
+            for url in ('http://evil.example:5000',
+                        'http://localhost.attacker.example:5000',
+                        'http://127.0.0.1.attacker.example:5000',
+                        'http://127.0.0.1@attacker.example:5000',
+                        'http://user:password@localhost:5000',
+                        'http://localhost:invalid',
+                        'http://[localhost',
+                        'https://localhost:5000'):
+                with self.subTest(url=url):
+                    config.write_text(json.dumps({'hub_url': url}))
+                    r = self.run_cli('mcp-config')
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertEqual(r.stdout, '')
         finally:
-            (self.tmp / '.config/ananta-cockpit/codecompass.json').write_text(
+            config.write_text(
                 json.dumps({'hub_url': f'http://127.0.0.1:{self.port}',
                             'server_name': 'ananta_codecompass'}))
+
+    def test_uses_custom_xdg_config_home(self):
+        self.run_cli('login', '--username', 'u', stdin='p\n\n')
+        with tempfile.TemporaryDirectory(prefix='ac-occ-config-') as config_home:
+            config = Path(config_home) / 'ananta-cockpit/codecompass.json'
+            config.parent.mkdir()
+            config.write_text(json.dumps({'hub_url': f'http://localhost:{self.port}',
+                                          'server_name': 'custom_server'}))
+            env = dict(self.env, XDG_CONFIG_HOME=config_home)
+            r = subprocess.run([sys.executable, str(OC_CC), 'mcp-config'],
+                               capture_output=True, text=True, env=env, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            server = json.loads(r.stdout)['mcp']['custom_server']
+            self.assertEqual(server['url'], f'http://localhost:{self.port}/v1/mcp')
+
+    def test_config_home_defaults_when_unset_or_empty(self):
+        self.run_cli('login', '--username', 'u', stdin='p\n\n')
+        for value in (None, ''):
+            with self.subTest(value=value):
+                env = dict(self.env)
+                if value is None:
+                    env.pop('XDG_CONFIG_HOME')
+                else:
+                    env['XDG_CONFIG_HOME'] = value
+                r = subprocess.run([sys.executable, str(OC_CC), 'mcp-config'],
+                                   capture_output=True, text=True, env=env, timeout=30)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                server = json.loads(r.stdout)['mcp']['ananta_codecompass']
+                self.assertEqual(server['url'], f'http://127.0.0.1:{self.port}/v1/mcp')
+
+    def test_run_signals_unavailable_hub_before_start(self):
+        self.run_cli('login', '--username', 'u', stdin='p\n\n')
+        with ThreadingHTTPServer(('127.0.0.1', 0), MockHub) as stopped_server:
+            port = stopped_server.server_address[1]
+        config = self.tmp / '.config/ananta-cockpit/codecompass.json'
+        original = config.read_text()
+        config.write_text(json.dumps({'hub_url': f'http://127.0.0.1:{port}'}))
+        try:
+            r = self.run_cli('run')
+            self.assertEqual(r.returncode, 5, r.stderr)
+        finally:
+            config.write_text(original)
+
+    def test_run_rejects_failed_ping_before_start(self):
+        self.run_cli('login', '--username', 'u', stdin='p\n\n')
+        MockHub.state['ping_status'] = 503
+        try:
+            env = dict(self.env, PATH='')
+            r = subprocess.run([sys.executable, str(OC_CC), 'run'],
+                               capture_output=True, text=True, env=env, timeout=30)
+            self.assertEqual(r.returncode, 5, r.stderr)
+        finally:
+            MockHub.state.pop('ping_status')
 
     def test_login_stores_token_0600(self):
         r = self.run_cli('login', '--username', 'u', stdin='p\n\n')

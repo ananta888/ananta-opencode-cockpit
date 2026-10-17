@@ -3,10 +3,18 @@
 # Reihenfolge: Python-Unit/Integration -> Bun (Router) -> Bash-Regression.
 set -u
 HERE="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+ROOT="$(dirname "$HERE")"
 FAIL=0
 
-echo "########## Python unittest ##########"
-python3 -m unittest discover -s "$HERE" -p 'test_*.py' -v || FAIL=1
+echo "########## Python-Tests (pytest/unittest) ##########"
+if python3 -m pytest --version >/dev/null 2>&1; then
+  ( cd "$ROOT" && python3 -m pytest tests/ -q ) || FAIL=1
+elif command -v uv >/dev/null; then
+  ( cd "$ROOT" && uv run --with pytest python -m pytest tests/ -q ) || FAIL=1
+else
+  echo "Weder pytest noch uv gefunden – bitte 'pip install pytest' oder uv installieren."
+  FAIL=1
+fi
 
 echo
 echo "########## Bun: slim-router ##########"

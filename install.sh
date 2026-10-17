@@ -31,12 +31,14 @@ backup() {
 }
 
 # --- 1. Cockpit -------------------------------------------------------------
-for f in tmux_setup.py actions.py sidebar.py status-click.sh cockpit; do
-  backup "$SHARE/$f" "$f"
+for f in "$SRC"/cockpit/*.py status-click.sh cockpit; do
+  name="${f##*/}"
+  backup "$SHARE/$name" "$name"
 done
-install -m 644 "$SRC/cockpit/tmux_setup.py" "$SHARE/tmux_setup.py"
-install -m 644 "$SRC/cockpit/actions.py" "$SHARE/actions.py"
-install -m 644 "$SRC/cockpit/sidebar.py" "$SHARE/sidebar.py"
+for source in "$SRC"/cockpit/*.py; do
+  name="${source##*/}"
+  install -m 644 "$source" "$SHARE/$name"
+done
 install -m 755 "$SRC/cockpit/status-click.sh" "$SHARE/status-click.sh"
 install -m 755 "$SRC/cockpit/cockpit" "$SHARE/cockpit"
 

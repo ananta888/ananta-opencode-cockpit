@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# tmux-Mausklick auf die Ananta-Statusleiste.
-# Parameter: <mouse_status_range> <session_id> <projekt> <root>
-# Reagiert NUR auf die Bereiche ac0..ac7 – alle anderen Klicks sind no-ops.
+# Compatibility entry point: RANGE SESSION PROJECT ROOT [left|right].
+# Alte Bereiche ac0..ac7 oeffnen die klassischen Aktions-Popups; die neuen
+# Statusleisten-Bereiche menu-*/chat-* werden an status.py delegiert.
 set -u
-range="${1:-}"; sid="${2:-}"; project="${3:-$PWD}"; root="${4:-}"
+range="${1:-}"; sid="${2:-}"; project="${3:-$PWD}"
+root="${4:-$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)}"
+button="${5:-left}"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/ananta-cockpit"
 LOG="$STATE/status-click.log"
 mkdir -p "$STATE"
@@ -18,28 +20,22 @@ case "$range" in
   ac5) action=router ;;
   ac6) action=codecompass ;;
   ac7) action=logs ;;
-  *) exit 0 ;;
+  menu-*|chat-*)
+    exec python3 "$root/status.py" click "$range" "$sid" "$button"
+    ;;
+  *)
+    log "noop range=$range sid=$sid"
+    exit 0
+    ;;
 esac
 
-if [[ -z "$root" || -z "$sid" ]]; then
+log "click action=$action range=$range sid=$sid"
+if [[ -z "$sid" || -z "${TMUX:-}" || ! -e "$root/cockpit" ]]; then
   log "skip action=$action reason=missing-args range=$range sid=$sid root=$root"
   exit 0
 fi
-if [[ ! -x "$root/cockpit" && ! -f "$root/cockpit" ]]; then
-  log "error action=$action reason=cockpit-missing root=$root"
-  exit 1
-fi
-if [[ -z "${TMUX:-}" ]]; then
-  log "error action=$action reason=not-in-tmux"
-  exit 1
-fi
-
-log "click action=$action range=$range sid=$sid"
 # Aktion in einem separaten Popup starten; Fehler werden protokolliert.
 tmux display-popup -t "$sid" -E -w 85% -h 75% -d "$project" \
-  "bash \"$root/cockpit\" action $action \"$project\""
-rc=$?
-if [ "$rc" -ne 0 ]; then
-  log "popup-failed action=$action rc=$rc"
-fi
+  "bash \"$root/cockpit\" action $action \"$project\"" \
+  || log "popup-failed action=$action"
 exit 0

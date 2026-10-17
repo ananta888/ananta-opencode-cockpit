@@ -8,7 +8,7 @@ Standardablauf:
   oc-codecompass run [-- ...]     OpenCode mit MCP-Injection starten
   oc-codecompass tools            verfuegbare Tools auflisten
 
-Konfiguration: ~/.config/ananta-cockpit/codecompass.json
+Konfiguration: ${XDG_CONFIG_HOME:-~/.config}/ananta-cockpit/codecompass.json
   {"hub_url": "http://127.0.0.1:5000", "server_name": "ananta_codecompass"}
 Token: ~/.local/state/ananta-cockpit/codecompass-token.json (0600, nie ausgeben)
 Nur Standardbibliothek; keine LLM-Aufrufe.
@@ -24,15 +24,17 @@ import stat
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / '.config/ananta-cockpit/codecompass.json'
+CONFIG_PATH = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'ananta-cockpit/codecompass.json'
 STATE_DIR = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ananta-cockpit'
 TOKEN_PATH = STATE_DIR / 'codecompass-token.json'
 
 DEFAULTS = {'hub_url': 'http://127.0.0.1:5000', 'server_name': 'ananta_codecompass'}
 TOKEN_TTL_MARGIN_SECONDS = 60
+MCP_UNAVAILABLE_EXIT = 5  # Hub-Fehler vor exec; OpenCode wurde noch nicht gestartet.
 
 
 def load_config() -> dict:
@@ -43,7 +45,17 @@ def load_config() -> dict:
         pass
     # hub_url muss ein lokaler/erlaubter Endpunkt sein
     url = str(cfg.get('hub_url') or DEFAULTS['hub_url'])
-    if not url.startswith(('http://127.0.0.1', 'http://localhost')):
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        local_url = (parsed.scheme == 'http'
+                     and parsed.hostname in ('127.0.0.1', 'localhost')
+                     and parsed.username is None and parsed.password is None
+                     and not parsed.query and not parsed.fragment
+                     and (parsed.port is None or parsed.port > 0)
+                     and not any(char.isspace() for char in url))
+    except ValueError:
+        local_url = False
+    if not local_url:
         print('FEHLER: hub_url muss auf 127.0.0.1/localhost zeigen (Ist:', url, ')', file=sys.stderr)
         sys.exit(2)
     cfg['hub_url'] = url.rstrip('/')
@@ -264,13 +276,16 @@ def cmd_run(cfg: dict, args) -> int:
                                  payload={'jsonrpc': '2.0', 'id': 0, 'method': 'ping'})
     except ConnectionError as exc:
         print(f'FEHLER: Hub nicht erreichbar: {exc}', file=sys.stderr)
-        return 1
+        return MCP_UNAVAILABLE_EXIT
     if status in (401,):
         print('Token abgelaufen. Erneut: oc-codecompass login', file=sys.stderr)
         return 3
     if status == 403:
         print('MCP-Exposure auf dem Hub deaktiviert.', file=sys.stderr)
         return 4
+    if status != 200:
+        print(f'FEHLER: MCP-Endpunkt nicht verfuegbar (HTTP {status}).', file=sys.stderr)
+        return MCP_UNAVAILABLE_EXIT
     # Bestehende OPENCODE_CONFIG_CONTENT zusammenfuehren, nicht ueberschreiben.
     merged: dict = {}
     raw = os.environ.get('OPENCODE_CONFIG_CONTENT', '').strip()

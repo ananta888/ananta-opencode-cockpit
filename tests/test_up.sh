@@ -50,7 +50,7 @@ STUB="$FAKE/bin"; mkdir -p "$STUB" "$FAKE/proj"
 cat > "$STUB/oc-codecompass" <<EOF
 #!/usr/bin/env bash
 echo "oc:\$*" >> "$FAKE/stub.log"
-case "\${1:-}" in status) exit 0;; run) exit 0;; esac
+case "\${1:-}" in status) exit 0;; run) exit "\${OC_RUN_RC:-0}";; esac
 exit 0
 EOF
 cat > "$STUB/opencode" <<EOF
@@ -79,9 +79,9 @@ tmux has-session 2>/dev/null && ok 'tmux-Session angelegt' || bad 'tmux-Session 
 sidebar=$(tmux list-panes -a -F '#{pane_id}:#{@ananta_cockpit}' 2>/dev/null | grep -c ':1$')
 [ "${sidebar:-0}" -ge 1 ] && ok 'Sidebar-Pane mit Marker' || bad "Sidebar-Pane fehlt ($sidebar)"
 sid=$(tmux display-message -p '#{session_id}' 2>/dev/null || tmux list-sessions -F '#{session_id}' 2>/dev/null | head -1)
-left=$(tmux show-options -t "$sid" status-left 2>/dev/null || true)
-grep -q 'CODECOMPASS' <<<"$left" && ok 'Statusleiste zeigt CODECOMPASS' || bad "Statusleiste: $left"
-grep -q 'SIDE' <<<"$left" && ok 'Statusleiste zeigt SIDE' || bad 'Statusleiste ohne SIDE'
+left=$(tmux show-options -t "$sid" 'status-format[0]' 2>/dev/null || true)
+grep -q 'Werkzeuge' <<<"$left" && ok 'Statusleiste zeigt Werkzeuge-Menue' || bad "Statusleiste: $left"
+grep -q 'Chat' <<<"$left" && ok 'Statusleiste zeigt Chat-Menue' || bad 'Statusleiste ohne Chat'
 
 # Zweiter Lauf: idempotent, --no-mcp -> direkter opencode-Stub
 : > "$FAKE/stub.log"
@@ -102,6 +102,26 @@ rc=$?
 [ $rc = 0 ] && ok 'detach auf existenter Session rc=0' || bad "detach-exist rc=$rc"
 grep -q 'open terminal failed' <<<"$out" && bad 'detach hat angehaengt (TTY-Fehler)' || ok 'detach ohne Attach-Fehler'
 grep -q 'laeuft bereits' <<<"$out" && ok 'Hinweis: Session laeuft bereits' || bad 'kein Laeuft-bereits-Hinweis'
+
+echo "== up: MCP-Startfehler und OpenCode-Exitcodes =="
+FALLBACK_BIN="$FAKE/fallback-bin"; mkdir -p "$FALLBACK_BIN"
+printf '#!/bin/sh\nexit 0\n' > "$FALLBACK_BIN/python3"
+chmod +x "$FALLBACK_BIN/python3"
+for run_rc in 3 4 5; do
+  : > "$FAKE/stub.log"
+  PATH="$FALLBACK_BIN:$STUB:$PATH" TMUX=stub OC_RUN_RC="$run_rc" \
+    $COCKPIT up "$FAKE/proj" -m prov/mdl >/dev/null 2>&1
+  rc=$?
+  [ "$rc" = 0 ] && ok "MCP-Fehler $run_rc: Fallback rc=0" || bad "MCP-Fehler $run_rc: rc=$rc"
+  grep -q "opencode:--model prov/mdl $FAKE/proj" "$FAKE/stub.log" && \
+    ok "MCP-Fehler $run_rc: OpenCode ohne MCP gestartet" || bad "MCP-Fehler $run_rc: Fallback fehlt"
+done
+: > "$FAKE/stub.log"
+PATH="$FALLBACK_BIN:$STUB:$PATH" TMUX=stub OC_RUN_RC=1 \
+  $COCKPIT up "$FAKE/proj" >/dev/null 2>&1
+rc=$?
+[ "$rc" = 1 ] && ok 'OpenCode-Exitcode bleibt erhalten' || bad "OpenCode-Exitcode: $rc"
+grep -q '^opencode:' "$FAKE/stub.log" && bad 'OpenCode wurde erneut gestartet' || ok 'kein zweiter OpenCode-Start'
 
 tmux kill-server 2>/dev/null || true
 rm -rf "$FAKE"

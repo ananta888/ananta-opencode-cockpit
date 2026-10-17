@@ -69,6 +69,24 @@ class OcSide(unittest.TestCase):
         r = self._run('--session', 'ses_main01', '--dir', '/nonexistent-xyz')
         self.assertNotEqual(r.returncode, 0)
 
+    def test_rejects_invalid_layout_before_starting(self):
+        result = self._run('--session', 'ses_main01', '--layout', 'diagonal')
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual((self.fake.state / 'sessions.txt').read_text(), 'ses_main01\nses_other02\n')
+
+    def test_rejects_inline_with_pane_layout(self):
+        result = self._run('--session', 'ses_main01', '--inline', '--layout', 'left')
+        self.assertEqual(result.returncode, 2)
+
+    def test_resume_does_not_fork_or_change_registry(self):
+        target = self.fake.bin / 'opencode'
+        target.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+        result = self._run('--session', 'ses_other02', '--resume', '--inline', '--dir', '/tmp')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['--session', 'ses_other02'])
+        log = Path(self.fake.env()['XDG_STATE_HOME']) / 'ananta-cockpit/side-chats.json'
+        self.assertFalse(log.exists())
+
     def test_records_new_forks(self):
         r = self._run('--session', 'ses_main01', '--dir', '/tmp',
                       '--model', 'xiaomi-token-plan-ams/mimo-v2.6-flash')

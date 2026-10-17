@@ -15,3 +15,6 @@ __pycache__/
 
 # Installations-Backups duerfen nicht ins Repo
 backups/
+
+# Agent-Session-Evidence
+.omo/

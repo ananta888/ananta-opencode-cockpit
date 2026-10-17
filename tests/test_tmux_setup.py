@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit-/Integrationstests fuer tmux_setup.py (unittest, keine externen Abhaengigkeiten)."""
 import contextlib
+import json
 import os
 import subprocess
 import sys
@@ -115,22 +116,57 @@ class TmuxSetupIntegration(unittest.TestCase):
     """Echter tmux-Server (detached Session) – prueft Start/Idempotenz/Stop."""
 
     def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='ac-tmux-test-')
+        self.socket = str(Path(self.tmp.name) / 'tmux.sock')
         self.session = 'ac-unittest'
-        subprocess.run(['tmux', 'kill-session', '-t', self.session],
-                       capture_output=True)
-        subprocess.run(['tmux', 'new-session', '-d', '-s', self.session,
-                        '-c', '/tmp'], check=True)
-        self.state = Path(tempfile.mkdtemp(prefix='ac-state-'))
-        self.project = tempfile.mkdtemp(prefix='ac-proj-')
+        self.old_tmux = os.environ.get('TMUX')
+        subprocess.run(['tmux', '-S', self.socket, '-f', '/dev/null', 'new-session',
+                        '-d', '-s', self.session, '-c', '/tmp'], check=True)
+        os.environ['TMUX'] = f'{self.socket},0,0'
+        self.state = Path(self.tmp.name) / 'state'
+        self.project = str(Path(self.tmp.name) / 'project')
+        Path(self.project).mkdir()
         self.env = os.environ.copy()
-        self.env['TMUX'] = subprocess.check_output(
-            ['tmux', 'display-message', '-p',
-             '#{socket_path},#{session_id},#{pane_id}'],
-            text=True).strip().rsplit(',', 1)[0]
 
     def tearDown(self):
-        subprocess.run(['tmux', 'kill-session', '-t', self.session],
-                       capture_output=True)
+        subprocess.run(['tmux', '-S', self.socket, 'kill-server'], capture_output=True)
+        if self.old_tmux is None:
+            os.environ.pop('TMUX', None)
+        else:
+            os.environ['TMUX'] = self.old_tmux
+        self.tmp.cleanup()
+
+    def test_restores_exact_options_and_bindings(self):
+        # Given custom local formats, empty strings, and existing bindings.
+        tmux_setup.tm('set-option', '-t', self.session, 'status-left', '')
+        tmux_setup.tm('set-option', '-t', self.session, 'status-format[0]', 'custom #{session_name}')
+        tmux_setup.tm('set-option', '-t', self.session, 'status-format[2]', 'third row')
+        tmux_setup.tm('set-option', '-t', self.session, 'prefix', 'C-a')
+        tmux_setup.tm('bind-key', '-T', 'prefix', 'g', 'display-message', 'original g')
+        tmux_setup.tm('bind-key', '-T', 'ananta', 'x', 'display-message', 'original table')
+        before_options = tmux_setup.tm('show-options', '-t', self.session)
+        before_bindings = tmux_setup.tm('list-keys')
+        # When start is repeated and stopped.
+        tmux_setup.start(str(ROOT / 'cockpit'), self.project, self.state)
+        active_status = tmux_setup.tm('show-options', '-v', '-t', self.session, 'status')
+        active_format = tmux_setup.tm('show-options', '-v', '-t', self.session, 'status-format[0]')
+        tmux_setup.start(str(ROOT / 'cockpit'), self.project, self.state)
+        tmux_setup.stop(str(ROOT / 'cockpit'), self.project, self.state)
+        after_options = tmux_setup.tm('show-options', '-t', self.session)
+        after_bindings = tmux_setup.tm('list-keys')
+        # Then exact local options and all bindings are restored.
+        self.assertEqual(active_status, '2')
+        self.assertIn('C-a g', active_format)
+        self.assertEqual(after_options, before_options)
+        self.assertEqual(after_bindings, before_bindings)
+        evidence = os.environ.get('STATUS_EVIDENCE_DIR')
+        if evidence:
+            target = Path(evidence)
+            target.mkdir(parents=True, exist_ok=True)
+            (target / 'restoration.json').write_text(json.dumps({
+                'before_options': before_options, 'after_options': after_options,
+                'before_bindings': before_bindings, 'after_bindings': after_bindings,
+                'active_status': active_status, 'active_format': active_format}, indent=2))
 
     def _panes(self):
         out = subprocess.check_output(

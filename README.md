@@ -73,30 +73,63 @@ ananta-cockpit stop
 
 ## Bedienung
 
-Obere Menueleiste (Mausklick) und rechtes Panel (Maus oder Tasten 1–8):
+Oben eine **Menueleiste** (`ananta  Chat  Kontext  Ansicht  Modell  Werkzeuge  Hilfe`)
+mit Untermenues per Mausklick oder `Prefix g` + Menuebuchstabe; daneben **Chat-Tabs**
+in der Statusleiste (Klick fokussiert, Rechtsklick oeffnet das Chat-Menue,
+`Prefix g 1–9` wechselt den Chat). Rechts steht das **Chat-Baum-Panel**:
 
-| Taste | Bereich | Inhalt |
-|---|---|---|
-| 1 | Side-Chat | `o` Fork oeffnen (Modell waehlbar), `c` temporaere Side-Chats aufraeumen |
-| 2 | Sessions | `opencode session list` |
-| 3 | Modelle | Modelluebersicht (nur Anzeige, keine Umschaltung) |
-| 4 | Plaene | `slim-plan brief` |
-| 5 | Kontext-Sync | Vorschau -> ausdrueckliche Bestaetigung -> Uebernahme |
-| 6 | Router | Konfiguration + Modell-Cooldowns |
-| 7 | CodeCompass | Hub-MCP-Status, Tools, OpenCode-Mit-CodeCompass-Start |
-| 8 | Logs | Router-/Context-Logs (Auszug) |
+| Taste | Wirkung |
+|---|---|
+| Pfeil auf/ab, Klick | Chat auswaehlen |
+| Enter/Klick | geoeffneten Chat fokussieren; gespeicherten fortsetzen |
+| `n` | neuer Hauptchat |
+| `s` | neuer Side-Chat (Fork des aktiven Chats) |
+| `m` | Hauptmenue oeffnen |
+| Rechtsklick | Chat-Menue (umbenennen, schliessen, Ansicht, Sync ...) |
+| `q` | Panel ausblenden (`Ansicht -> Sidebar ein/aus` holt es zurueck) |
+
+Alle Funktionen des Cockpits sind auch ohne Maus ueber die Menues erreichbar;
+jeder Menueeintrag zeigt seine Tastenkombination (`Prefix g` + Route) an.
 
 Kritische Aktionen (Loeschen, Sync-Uebernahme) fragen ausdruecklich nach.
-`q` schliesst das Panel.
+
+Auswahllisten in den Popups lassen sich mit **Pfeil auf/ab + Enter** oder
+**Mausklick** bedienen. Einfach tippen filtert nach Titel, Session-ID oder Modell;
+Backspace loescht den Filter. Mausrad und Bild auf/ab scrollen, Pos1/Ende springen
+zum ersten/letzten Treffer. **Esc** bricht ab.
+**Rechtsklick** auf einen Eintrag oder **F2** kopiert dessen Session-ID bzw.
+Modell-ID in die Systemzwischenablage, ohne die Auswahl zu bestaetigen.
+Unter WSL verwendet das Cockpit dafuer die Windows-Zwischenablage (`clip.exe`).
+Fuer beliebigen Text im Windows Terminal: **Shift gedrueckt halten und mit der
+Maus ziehen**, dann **Ctrl+Shift+C** zum Kopieren bzw. **Ctrl+Shift+V** zum Einfuegen.
+Beim Aufraeumen lassen sich mehrere Side-Chats mit Leertaste oder Klick markieren
+und mit Enter uebernehmen; vor dem Loeschen folgt eine separate Bestaetigung.
+Session-IDs muessen nicht mehr abgetippt werden. Ohne interaktives Terminal gibt
+es eine nummerierte Auswahl.
 
 ## Side-Chats (oc-side)
 
 ```bash
 oc-side --session ses_XXXX --model xiaomi-token-plan-ams/mimo-v2.6-flash --dir ~/ananta
+oc-side --session ses_SIDE_ID --resume --layout left --dir ~/ananta
+oc-side --session ses_SIDE_ID --resume --layout below --dir ~/ananta
 ```
 
 - Oeffnet einen **Fork** der Hauptsitzung in einem tmux-Popup; die Hauptsitzung
   bleibt unveraendert.
+- Aus dem Cockpit startet der Fork im bereits offenen Popup (`--inline`),
+  da tmux keine verschachtelten Popups ausfuehrt. Startfehler bleiben sichtbar.
+- Im Menue **Side-Chat -> Bestehenden Side-Chat fortsetzen** eine gespeicherte
+  Sitzung waehlen. Dabei entsteht kein weiterer Fork; das bisherige Modell bleibt
+  erhalten. Erfasste Side-Chats stehen zuerst; weitere OpenCode-Sitzungen folgen,
+  damit auch Chats aus direkt geschlossenen tmux-Panes wieder erreichbar bleiben.
+- Beim Oeffnen und Fortsetzen ist die **Platzierung** waehlbar: Popup, links neben
+  der Hauptsitzung oder darunter. Pane-Starts schliessen das Auswahl-Popup sofort.
+  Die Cockpit-Seitenleiste bleibt dabei erhalten.
+- Zum Wechsel der Darstellung den Chat beenden und dieselbe Sitzung erneut mit
+  der gewuenschten Platzierung fortsetzen. Schliessen loescht die Sitzung nicht.
+  Zwischen eingebetteten Panes mit **Ctrl+B, Pfeiltaste** wechseln; die Pane-Groesse
+  laesst sich wie gewohnt mit tmux veraendern.
 - Session-IDs werden gegen `opencode session list` geprueft.
 - Erzeugte Forks werden protokolliert (`~/.local/state/ananta-cockpit/side-chats.json`)
   und koennen ueber Menue 1 -> `c` aufgeraeumt werden.

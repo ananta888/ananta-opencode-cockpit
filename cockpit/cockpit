@@ -16,6 +16,9 @@ Ananta Cockpit:
   stop                           Cockpit entfernen, Optionen wiederherstellen
   action <side|sessions|models|plans|sync|router|codecompass|logs>
                                  Einzelne Aktion (Menuepunkt) ausfuehren
+  menu [MENUE] [PROJEKT] [CHAT]  natives tmux-Menue oeffnen (Standard: root)
+  dispatch AKTION [PROJEKT] [CHAT]
+                                 Katalog-Aktion ausfuehren (app.py)
   help                           diese Hilfe
 EOF
 }
@@ -135,7 +138,7 @@ cmd_up() {
     echo "Starte OpenCode MIT CodeCompass-MCP (Projekt: $project)"
     local occ_rc=0
     oc-codecompass run "${run_args[@]}" "$project" || occ_rc=$?
-    if [[ "$occ_rc" -eq 3 || "$occ_rc" -eq 4 ]]; then
+    if [[ "$occ_rc" -eq 3 || "$occ_rc" -eq 4 || "$occ_rc" -eq 5 ]]; then
       echo "Hinweis: MCP-Start fehlgeschlagen (rc=$occ_rc) – starte ohne MCP." >&2
       use_cc=0
       final_rc=0
@@ -173,6 +176,12 @@ case "${1:-help}" in
     ;;
   action)
     exec python3 "$ROOT/actions.py" "${2:-}" "${3:-$PWD}" "$ROOT"
+    ;;
+  menu)
+    exec python3 "$ROOT/menus.py" "${2:-root}" "${3:-$PWD}" "${4:-}"
+    ;;
+  dispatch)
+    exec python3 "$ROOT/app.py" dispatch "${2:-}" "${3:-$PWD}" "${4:-}"
     ;;
   sidebar)
     exec python3 "$ROOT/sidebar.py" "${2:-$PWD}" "$ROOT"
