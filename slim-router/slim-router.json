@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "fallback_models": [
+    "xiaomi-token-plan-ams/mimo-v2.6-pro",
+    "zai-coding-plan/glm-5.3",
+    "opencode-go/kimi-k3",
+    "opencode-go/deepseek-v4.1-flash",
+    "ananta-local/ananta-code-27b",
+    "opencode/deepseek-v4.1-flash-free",
+    "opencode/glm-5.3-flash-free",
+    "opencode/mimo-v2.6-flash-free"
+  ],
+  "retryable_patterns": [
+    "usage limit",
+    "quota",
+    "rate limit",
+    "too many requests",
+    "insufficient balance",
+    "no resource package",
+    "overloaded",
+    "service unavailable",
+    "timeout",
+    "econnreset",
+    "fetch failed"
+  ],
+  "max_attempts": 7,
+  "cooldown_seconds": 300,
+  "local_model": "ananta-local/ananta-code-27b",
+  "local_max_approx_input_tokens": 20000,
+  "log_file": "/tmp/opencode-slim-router.log",
+  "state_dir": ".opencode/slim-context/router",
+  "failback_enabled": true,
+  "failback_max_cooldown_seconds": 21600,
+  "failback_backoff_factor": 2
+}

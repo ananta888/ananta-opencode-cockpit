@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "context_dir": ".opencode/slim-context",
+  "warning_ratio": 0.7,
+  "safe_local_ratio": 0.72,
+  "reserve_output_tokens": 4096,
+  "model_context": { "ananta-local/ananta-code-27b": 32768 },
+  "auto_prune": false,
+  "auto_compact": false,
+  "max_tool_chars": 12000,
+  "log_file": "/tmp/opencode-slim-context.log"
+}

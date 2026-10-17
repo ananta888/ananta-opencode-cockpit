@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# ROOT immer ueber die reale Datei ermitteln – funktional auch bei Symlinks
+# und unabhaengig vom aktuellen Arbeitsverzeichnis.
+ROOT="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/ananta-cockpit"
+mkdir -p "$STATE"
+
+case "${1:-help}" in
+  start)
+    if [[ -z "${TMUX:-}" ]]; then
+      echo 'Bitte zuerst in tmux wechseln: tmux new -s ananta'; exit 2
+    fi
+    project="${2:-$PWD}"
+    exec python3 "$ROOT/tmux_setup.py" start "$ROOT" "$project" "$STATE"
+    ;;
+  stop)
+    exec python3 "$ROOT/tmux_setup.py" stop "$ROOT" "${2:-$PWD}" "$STATE"
+    ;;
+  action)
+    exec python3 "$ROOT/actions.py" "${2:-}" "${3:-$PWD}" "$ROOT"
+    ;;
+  sidebar)
+    exec python3 "$ROOT/sidebar.py" "${2:-$PWD}" "$ROOT"
+    ;;
+  *) echo 'Ananta Cockpit: ananta-cockpit start [Projektpfad] | stop | action <side|sessions|models|plans|logs|router|sync|help>';;
+esac

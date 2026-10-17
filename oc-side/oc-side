@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+cat <<'TXT'
+oc-side --session SESSION_ID [--model PROVIDER/MODEL] [--dir PROJECT] [--width 90] [--height 90]
+
+Creates a forked OpenCode session in a tmux popup, leaving the parent TUI
+and its conversation untouched. Requires tmux >= 3.2 and running inside tmux.
+
+Forks created through this tool are recorded in
+~/.local/state/ananta-cockpit/side-chats.json so the cockpit can list and
+optionally delete temporary side chats later.
+
+Example:
+  oc-side --session ses_xxx --model xiaomi-token-plan-ams/mimo-v2.6-flash
+TXT
+}
+SESSION=""; MODEL=""; DIR="$PWD"; WIDTH=90; HEIGHT=90
+while (($#)); do
+ case "$1" in
+  --session) SESSION="${2:?missing session ID}"; shift 2;;
+  --model) MODEL="${2:?missing model}"; shift 2;;
+  --dir) DIR="${2:?missing directory}"; shift 2;;
+  --width) WIDTH="${2:?missing width}"; shift 2;;
+  --height) HEIGHT="${2:?missing height}"; shift 2;;
+  -h|--help) usage; exit 0;;
+  *) echo "Unknown option: $1" >&2; usage >&2; exit 2;;
+ esac
+done
+[[ "$SESSION" =~ ^ses_[A-Za-z0-9_-]+$ ]] || { echo 'Please supply --session ses_... of the current MAIN session.' >&2; exit 2; }
+[[ -d "$DIR" ]] || { echo "Project directory does not exist: $DIR" >&2; exit 2; }
+[[ "$WIDTH" =~ ^[0-9]+$ && "$HEIGHT" =~ ^[0-9]+$ ]] || { echo 'Popup sizes must be integer percentages.' >&2; exit 2; }
+((WIDTH>=30 && WIDTH<=100 && HEIGHT>=30 && HEIGHT<=100)) || { echo 'Popup sizes must be 30..100.' >&2; exit 2; }
+command -v tmux >/dev/null || { echo 'tmux not found. Install with: sudo apt install tmux' >&2; exit 1; }
+command -v opencode >/dev/null || { echo 'opencode not found in PATH' >&2; exit 1; }
+[[ -n "${TMUX:-}" ]] || { echo 'Start your main OpenCode inside tmux first: tmux new -s ananta' >&2; exit 1; }
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ananta-cockpit"
+SIDE_LOG="$STATE_DIR/side-chats.json"
+mkdir -p "$STATE_DIR"
+
+list_sessions() { opencode session list 2>/dev/null | grep -oE 'ses_[A-Za-z0-9_-]+' | sort -u || true; }
+BEFORE="$(list_sessions)"
+
+# tmux executes a shell command string; use printf %q to quote every argument.
+printf -v CMD 'cd %q && exec opencode --session %q --fork' "$DIR" "$SESSION"
+if [[ -n "$MODEL" ]]; then
+ [[ "$MODEL" == */* ]] || { echo 'Model must be PROVIDER/MODEL.' >&2; exit 2; }
+ printf -v QM '%q' "$MODEL"
+ CMD+=" --model $QM"
+fi
+# display-popup -E closes popup when the forked OpenCode exits.
+tmux display-popup -E -w "${WIDTH}%" -h "${HEIGHT}%" -T 'OpenCode SIDE (exit to return)' "$CMD"
+
+# Nach dem Schliessen: neu entstandene Forks protokollieren (optional aufraeumbar).
+AFTER="$(list_sessions)"
+NEW="$(comm -13 <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | grep -E '^ses_' || true)"
+if [[ -n "$NEW" ]]; then
+  # IDs aus der Shell an die Persistenz uebergeben.
+  NEW_IDS="$NEW" PARENT="$SESSION" MODEL="$MODEL" LOGFILE="$SIDE_LOG" python3 - <<'PY'
+import json, os, tempfile, datetime
+path = os.environ['LOGFILE']
+new_ids = [x for x in os.environ.get('NEW_IDS','').split() if x.startswith('ses_')]
+parent = os.environ.get('PARENT','')
+model = os.environ.get('MODEL','')
+try:
+    data = json.load(open(path)) if os.path.exists(path) else []
+except Exception:
+    data = []
+now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+for sid in new_ids:
+    if not any(e.get('id') == sid for e in data):
+        data.append({'id': sid, 'parent': parent, 'model': model, 'created': now})
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.tmp-')
+with os.fdopen(fd, 'w') as f:
+    json.dump(data, f, indent=2)
+os.replace(tmp, path)
+print('Side-chat recorded:', ', '.join(new_ids))
+PY
+fi
