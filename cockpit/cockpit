@@ -23,5 +23,5 @@ case "${1:-help}" in
   sidebar)
     exec python3 "$ROOT/sidebar.py" "${2:-$PWD}" "$ROOT"
     ;;
-  *) echo 'Ananta Cockpit: ananta-cockpit start [Projektpfad] | stop | action <side|sessions|models|plans|logs|router|sync|help>';;
+  *) echo 'Ananta Cockpit: ananta-cockpit start [Projektpfad] | stop | action <side|sessions|models|plans|sync|router|codecompass|logs|help>';;
 esac
