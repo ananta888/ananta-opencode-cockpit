@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tmux-Mausklick auf die Ananta-Statusleiste.
 # Parameter: <mouse_status_range> <session_id> <projekt> <root>
-# Reagiert NUR auf die Bereiche ac0..ac6 – alle anderen Klicks sind no-ops.
+# Reagiert NUR auf die Bereiche ac0..ac7 – alle anderen Klicks sind no-ops.
 set -u
 range="${1:-}"; sid="${2:-}"; project="${3:-$PWD}"; root="${4:-}"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/ananta-cockpit"
@@ -16,7 +16,8 @@ case "$range" in
   ac3) action=plans ;;
   ac4) action=sync ;;
   ac5) action=router ;;
-  ac6) action=logs ;;
+  ac6) action=codecompass ;;
+  ac7) action=logs ;;
   *) exit 0 ;;
 esac
 

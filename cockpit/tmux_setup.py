@@ -23,6 +23,7 @@ CONTROLS = [
     ('plans', 'PLANS'),
     ('sync', 'SYNC'),
     ('router', 'ROUTER'),
+    ('codecompass', 'CODECOMPASS'),
     ('logs', 'LOGS'),
 ]
 

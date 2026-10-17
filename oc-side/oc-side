@@ -3,10 +3,12 @@ set -euo pipefail
 
 usage() {
 cat <<'TXT'
-oc-side --session SESSION_ID [--model PROVIDER/MODEL] [--dir PROJECT] [--width 90] [--height 90]
+oc-side --session SESSION_ID [--model PROVIDER/MODEL] [--dir PROJECT] [--width 90] [--height 90] [--codecompass]
 
 Creates a forked OpenCode session in a tmux popup, leaving the parent TUI
 and its conversation untouched. Requires tmux >= 3.2 and running inside tmux.
+--codecompass starts the fork via oc-codecompass run: the Ananta-Hub MCP
+endpoint (CodeCompass tools) is injected into the side session.
 
 Forks created through this tool are recorded in
 ~/.local/state/ananta-cockpit/side-chats.json so the cockpit can list and
@@ -16,7 +18,7 @@ Example:
   oc-side --session ses_xxx --model xiaomi-token-plan-ams/mimo-v2.6-flash
 TXT
 }
-SESSION=""; MODEL=""; DIR="$PWD"; WIDTH=90; HEIGHT=90
+SESSION=""; MODEL=""; DIR="$PWD"; WIDTH=90; HEIGHT=90; CODECOMPASS=0
 while (($#)); do
  case "$1" in
   --session) SESSION="${2:?missing session ID}"; shift 2;;
@@ -24,10 +26,14 @@ while (($#)); do
   --dir) DIR="${2:?missing directory}"; shift 2;;
   --width) WIDTH="${2:?missing width}"; shift 2;;
   --height) HEIGHT="${2:?missing height}"; shift 2;;
+  --codecompass) CODECOMPASS=1; shift;;
   -h|--help) usage; exit 0;;
   *) echo "Unknown option: $1" >&2; usage >&2; exit 2;;
  esac
 done
+if ((CODECOMPASS)); then
+  command -v oc-codecompass >/dev/null || { echo 'oc-codecompass not found. Run the cockpit install.sh first.' >&2; exit 1; }
+fi
 [[ "$SESSION" =~ ^ses_[A-Za-z0-9_-]+$ ]] || { echo 'Please supply --session ses_... of the current MAIN session.' >&2; exit 2; }
 [[ -d "$DIR" ]] || { echo "Project directory does not exist: $DIR" >&2; exit 2; }
 [[ "$WIDTH" =~ ^[0-9]+$ && "$HEIGHT" =~ ^[0-9]+$ ]] || { echo 'Popup sizes must be integer percentages.' >&2; exit 2; }
@@ -44,7 +50,11 @@ list_sessions() { opencode session list 2>/dev/null | grep -oE 'ses_[A-Za-z0-9_-
 BEFORE="$(list_sessions)"
 
 # tmux executes a shell command string; use printf %q to quote every argument.
-printf -v CMD 'cd %q && exec opencode --session %q --fork' "$DIR" "$SESSION"
+if ((CODECOMPASS)); then
+  printf -v CMD 'cd %q && exec oc-codecompass run -- --session %q --fork' "$DIR" "$SESSION"
+else
+  printf -v CMD 'cd %q && exec opencode --session %q --fork' "$DIR" "$SESSION"
+fi
 if [[ -n "$MODEL" ]]; then
  [[ "$MODEL" == */* ]] || { echo 'Model must be PROVIDER/MODEL.' >&2; exit 2; }
  printf -v QM '%q' "$MODEL"

@@ -4,6 +4,7 @@
 #   cockpit/      tmux-Oberflaeche   -> ~/.local/share/ananta-cockpit/ + ~/.local/bin/ananta-cockpit
 #   oc-side/      Side-Chat-Popups   -> ~/.local/bin/oc-side
 #   oc-side-sync/ Kontext-Sync       -> ~/.local/bin/oc-side-sync
+#   oc-codecompass/ Hub-MCP-Anbindung -> ~/.local/bin/oc-codecompass
 #   slim-router/  OpenCode-Plugins   -> ~/.config/opencode/plugins/ (+ Configs)
 #                   slim-plan CLI    -> ~/.local/bin/slim-plan
 #
@@ -70,6 +71,17 @@ chmod 755 "$BIN/oc-side-sync"
 # --- 4. slim-plan -----------------------------------------------------------
 backup "$BIN/slim-plan" "bin-slim-plan"
 install -m 755 "$SRC/slim-router/planctl.py" "$BIN/slim-plan"
+
+# --- 4b. oc-codecompass ------------------------------------------------------
+backup "$BIN/oc-codecompass" "bin-oc-codecompass"
+install -m 755 "$SRC/oc-codecompass/oc-codecompass" "$BIN/oc-codecompass"
+CC_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ananta-cockpit"
+mkdir -p "$CC_CFG_DIR"
+if [ ! -f "$CC_CFG_DIR/codecompass.json" ]; then
+  printf '{\n  "hub_url": "http://127.0.0.1:5000",\n  "server_name": "ananta_codecompass"\n}\n' \
+    > "$CC_CFG_DIR/codecompass.json"
+  echo "CodeCompass-Konfiguration angelegt: $CC_CFG_DIR/codecompass.json"
+fi
 
 # --- 5. OpenCode-Plugins und Configs (Backups, Schluessel bleiben unangetastet) --
 for f in slim-router.ts context-manager.ts; do

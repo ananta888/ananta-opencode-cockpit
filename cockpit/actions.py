@@ -124,9 +124,13 @@ if action == 'side':
                 else:
                     model = choose('Modell [xiaomi-token-plan-ams/mimo-v2.6-flash]: ') or \
                         'xiaomi-token-plan-ams/mimo-v2.6-flash'
+                    use_cc = choose('Mit CodeCompass-MCP starten? [j/N]: ').lower() in ('j', 'ja', 'y')
                     if shutil.which('oc-side'):
+                        argv = ['oc-side', '--session', session, '--dir', project, '--model', model]
+                        if use_cc and shutil.which('oc-codecompass'):
+                            argv.append('--codecompass')
                         print(f'Starte Side-Chat fuer {session} mit {model} ...')
-                        run(['oc-side', '--session', session, '--dir', project, '--model', model])
+                        run(argv)
                     else:
                         print('oc-side nicht installiert. Alternative im OpenCode-TUI: /fork')
                         print('CLI-Variante: opencode --session', session, '--fork')
@@ -154,6 +158,26 @@ elif action == 'plans':
                 print(' ', x.relative_to(p))
         else:
             print('Keine Plan-Dateien gefunden')
+
+elif action == 'codecompass':
+    occ = shutil.which('oc-codecompass')
+    if not occ:
+        print('oc-codecompass ist nicht installiert. Bitte install.sh erneut ausfuehren.')
+    else:
+        print('CodeCompass ueber den Ananta-Hub-MCP-Endpunkt.')
+        print('  s = Status    t = Tools    o = OpenCode mit CodeCompass starten    Enter = Abbrechen')
+        mode = choose('\nAuswahl [s/t/o/Enter]: ').lower()
+        if mode == 's':
+            run([occ, 'status'])
+        elif mode == 't':
+            run([occ, 'tools'])
+        elif mode == 'o':
+            model = choose('Modell [xiaomi-token-plan-ams/mimo-v2.6-flash]: ') or \
+                'xiaomi-token-plan-ams/mimo-v2.6-flash'
+            print('Starte OpenCode mit CodeCompass-MCP (Beenden wie ueblich)...')
+            run([occ, 'run', '--model', model])
+        else:
+            print('Abgebrochen.')
 
 elif action == 'logs':
     candidates = [Path('/tmp/opencode-slim-router.log'),
@@ -231,9 +255,9 @@ elif action == 'sync':
                 print('Nicht uebernommen.')
 
 elif action == 'help':
-    print('Menueleiste oben anklicken oder im Panel 1–7 druecken.')
+    print('Menueleiste oben anklicken oder im Panel 1–8 druecken.')
     print('  1 Side-Chat   2 Sessions   3 Modelle   4 Plaene')
-    print('  5 Sync        6 Router     7 Logs')
+    print('  5 Sync        6 Router     7 CodeCompass   8 Logs')
     print('q beendet das Panel. Ctrl+B + Pfeile wechseln das Pane.')
 else:
     print('Unbekannte Aktion:', action)

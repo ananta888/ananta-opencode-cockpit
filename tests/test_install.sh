@@ -23,6 +23,8 @@ bash "$ROOT/install.sh" >/dev/null 2>&1 || bad 'install.sh Lauf 1'
 [ -x "$HOME/.local/bin/oc-side" ] && ok 'oc-side installiert' || bad 'oc-side fehlt'
 [ -x "$HOME/.local/bin/oc-side-sync" ] && ok 'oc-side-sync installiert' || bad 'oc-side-sync fehlt'
 [ -x "$HOME/.local/bin/slim-plan" ] && ok 'slim-plan installiert' || bad 'slim-plan fehlt'
+[ -x "$HOME/.local/bin/oc-codecompass" ] && ok 'oc-codecompass installiert' || bad 'oc-codecompass fehlt'
+[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/ananta-cockpit/codecompass.json" ] && ok 'codecompass.json angelegt' || bad 'codecompass.json fehlt'
 [ -f "$HOME/.config/opencode/plugins/slim-router.ts" ] && ok 'Plugin slim-router installiert' || bad 'Plugin slim-router fehlt'
 [ -f "$HOME/.config/opencode/plugins/context-manager.ts" ] && ok 'Plugin context-manager installiert' || bad 'Plugin context-manager fehlt'
 [ -f "$HOME/.config/opencode/slim-router.json" ] && ok 'Config slim-router angelegt' || bad 'Config slim-router fehlt'
@@ -53,7 +55,7 @@ echo "== status-click.sh =="
 bash "$ROOT/install.sh" >/dev/null 2>&1
 SC="$XDG_DATA_HOME/ananta-cockpit/status-click.sh"
 export TMUX="/tmp/fake-socket,\$0,0"   # nur fuer den Guard; display-popup wird fehlschlagen
-for range in ac0 ac1 ac2 ac3 ac4 ac5 ac6; do
+for range in ac0 ac1 ac2 ac3 ac4 ac5 ac6 ac7; do
   "$SC" "$range" 'ses_test' /tmp "$XDG_DATA_HOME/ananta-cockpit" >/dev/null 2>&1
   [ $? = 0 ] && ok "range $range akzeptiert (rc=0)" || bad "range $range rc!=0"
 done

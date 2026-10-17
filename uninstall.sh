@@ -19,6 +19,7 @@ echo 'Ananta OpenCode Cockpit deinstallieren?'
 remove "$BIN/ananta-cockpit"
 remove "$BIN/oc-side"
 remove "$BIN/oc-side-sync"
+remove "$BIN/oc-codecompass"
 remove "$BIN/slim-plan"
 # Veraltete flache Kopien.
 for f in tmux_setup.py actions.py sidebar.py status-click.sh; do

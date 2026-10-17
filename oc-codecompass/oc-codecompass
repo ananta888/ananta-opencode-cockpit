@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""oc-codecompass – bindet den MCP-Endpunkt des Ananta-Hubs an OpenCode.
+
+Standardablauf:
+  oc-codecompass login            Hub-Login, Token lokal (0600) speichern
+  oc-codecompass status           Endpunkt- und Tool-Status anzeigen
+  oc-codecompass mcp-config       OpenCode-MCP-Konfiguration ausgeben
+  oc-codecompass run [-- ...]     OpenCode mit MCP-Injection starten
+  oc-codecompass tools            verfuegbare Tools auflisten
+
+Konfiguration: ~/.config/ananta-cockpit/codecompass.json
+  {"hub_url": "http://127.0.0.1:5000", "server_name": "ananta_codecompass"}
+Token: ~/.local/state/ananta-cockpit/codecompass-token.json (0600, nie ausgeben)
+Nur Standardbibliothek; keine LLM-Aufrufe.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import getpass
+import json
+import os
+import stat
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+CONFIG_PATH = Path.home() / '.config/ananta-cockpit/codecompass.json'
+STATE_DIR = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ananta-cockpit'
+TOKEN_PATH = STATE_DIR / 'codecompass-token.json'
+
+DEFAULTS = {'hub_url': 'http://127.0.0.1:5000', 'server_name': 'ananta_codecompass'}
+TOKEN_TTL_MARGIN_SECONDS = 60
+
+
+def load_config() -> dict:
+    cfg = dict(DEFAULTS)
+    try:
+        cfg.update(json.loads(CONFIG_PATH.read_text()))
+    except (OSError, ValueError):
+        pass
+    # hub_url muss ein lokaler/erlaubter Endpunkt sein
+    url = str(cfg.get('hub_url') or DEFAULTS['hub_url'])
+    if not url.startswith(('http://127.0.0.1', 'http://localhost')):
+        print('FEHLER: hub_url muss auf 127.0.0.1/localhost zeigen (Ist:', url, ')', file=sys.stderr)
+        sys.exit(2)
+    cfg['hub_url'] = url.rstrip('/')
+    return cfg
+
+
+def request_json(url: str, *, token: str | None = None, payload: dict | None = None, timeout: float = 8.0):
+    """Fuehrt einen HTTP-Request aus; liefert (status, body-dict-or-None)."""
+    data = None if payload is None else json.dumps(payload).encode()
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    req = urllib.request.Request(url, data=data, headers=headers,
+                                 method='POST' if payload is not None else 'GET')
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            body = json.loads(raw) if raw else None
+            return resp.status, body
+    except urllib.error.HTTPError as exc:
+        raw = exc.read() or b''
+        try:
+            return exc.code, json.loads(raw)
+        except ValueError:
+            return exc.code, None
+    except (urllib.error.URLError, OSError) as exc:
+        raise ConnectionError(str(exc)) from exc
+
+
+def load_token() -> dict | None:
+    try:
+        data = json.loads(TOKEN_PATH.read_text())
+        if isinstance(data, dict) and data.get('access_token'):
+            return data
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def jwt_expiry(token: str) -> float:
+    """Liest den exp-Claim aus dem JWT (nur fuer Client-Refresh-Timing, keine Verifikation)."""
+    try:
+        part = token.split('.')[1]
+        part += '=' * (-len(part) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(part))
+        return float(payload.get('exp') or 0)
+    except (IndexError, ValueError):
+        return 0.0
+
+
+def save_token(access_token: str, refresh_token: str = '') -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_DIR / '.codecompass-token.tmp'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as handle:
+        json.dump({'access_token': access_token, 'refresh_token': refresh_token,
+                   'expires_at': jwt_expiry(access_token)}, handle)
+    os.replace(tmp, TOKEN_PATH)
+    os.chmod(TOKEN_PATH, stat.S_IRUSR | stat.S_IWUSR)
+
+
+def try_refresh(cfg: dict) -> str | None:
+    """Erneuert den Access-Token per Refresh-Token (rotierend); None bei Misserfolg."""
+    record = load_token()
+    refresh = str((record or {}).get('refresh_token') or '')
+    if not refresh:
+        return None
+    try:
+        status, data = request_json(f"{cfg['hub_url']}/refresh-token",
+                                    payload={'token': refresh})
+    except ConnectionError:
+        return None
+    if status == 200 and isinstance(data, dict):
+        payload = data.get('data') or {}
+        token = str(payload.get('access_token') or '')
+        new_refresh = str(payload.get('refresh_token') or '')
+        if token:
+            save_token(token, new_refresh or refresh)
+            return token
+    return None
+
+
+def valid_token(record: dict | None) -> str | None:
+    if not record:
+        return None
+    expires = float(record.get('expires_at') or 0)
+    if expires and time.time() >= expires - TOKEN_TTL_MARGIN_SECONDS:
+        return None
+    return str(record.get('access_token') or '') or None
+
+
+def current_token(cfg: dict) -> str | None:
+    """Gueltiger Access-Token; versucht automatisch Refresh bei Ablauf."""
+    token = valid_token(load_token())
+    if token:
+        return token
+    return try_refresh(cfg)
+
+
+def cmd_login(cfg: dict, args) -> int:
+    username = args.username or input('Benutzername: ').strip()
+    if not username:
+        print('FEHLER: Benutzername erforderlich.', file=sys.stderr)
+        return 2
+    password = getpass.getpass('Passwort: ')
+    mfa = input('MFA-Token (leer falls nicht aktiv): ').strip()
+    body = {'username': username, 'password': password}
+    if mfa:
+        body['mfa_token'] = mfa
+    try:
+        status, data = request_json(f"{cfg['hub_url']}/login", payload=body)
+    except ConnectionError as exc:
+        print(f'FEHLER: Hub nicht erreichbar ({cfg["hub_url"]}): {exc}', file=sys.stderr)
+        return 1
+    if status == 200 and isinstance(data, dict):
+        payload = data.get('data') or {}
+        token = str(payload.get('access_token') or '')
+        refresh_token = str(payload.get('refresh_token') or '')
+        if not token:
+            print('FEHLER: Login-Antwort ohne Token.', file=sys.stderr)
+            return 1
+        save_token(token, refresh_token)
+        expires_at = jwt_expiry(token)
+        print(f'Login OK. Token gespeichert in {TOKEN_PATH}' +
+              (f' (gueltig bis {time.strftime("%H:%M:%S", time.localtime(expires_at))}).'
+               if expires_at else '.'))
+        return 0
+    detail = ''
+    if isinstance(data, dict):
+        detail = str((data.get('data') or {}).get('details') or data.get('message') or '')
+    print(f'FEHLER: Login nicht erfolgreich (HTTP {status}) {detail}'.strip(), file=sys.stderr)
+    return 1
+
+
+def authenticated_token(cfg: dict, *, for_command: str) -> str | None:
+    token = current_token(cfg)
+    if token:
+        return token
+    print(f'Kein gueltiges Token. Zuerst: oc-codecompass login (Befehl: {for_command}).', file=sys.stderr)
+    return None
+
+
+def cmd_status(cfg: dict, args) -> int:
+    token = authenticated_token(cfg, for_command='status')
+    if not token:
+        return 3
+    try:
+        status, data = request_json(f"{cfg['hub_url']}/v1/mcp/capabilities", token=token)
+    except ConnectionError as exc:
+        print(f'FEHLER: Hub nicht erreichbar: {exc}', file=sys.stderr)
+        return 1
+    if status == 403:
+        print('MCP-Exposure ist auf dem Hub deaktiviert (exposure_policy.mcp). '
+              'Aktivierung durch den Hub-Admin noetig.', file=sys.stderr)
+        return 4
+    if status == 401:
+        print('Token abgelaufen. Erneut: oc-codecompass login', file=sys.stderr)
+        return 3
+    if status != 200 or not isinstance(data, dict):
+        print(f'FEHLER: Unerwartete Antwort (HTTP {status}).', file=sys.stderr)
+        return 1
+    counts = data.get('counts') or {}
+    policy = data.get('policy') or {}
+    print(f"Hub:        {cfg['hub_url']}")
+    print(f"Endpunkt:   {cfg['hub_url']}/v1/mcp")
+    print(f"Exposure:   {'aktiv' if policy.get('enabled') else 'inaktiv'}")
+    print(f"Tools:      {counts.get('tools', '?')}")
+    print(f"Resources:  {counts.get('resources', '?')}")
+    return 0
+
+
+def cmd_tools(cfg: dict, args) -> int:
+    token = authenticated_token(cfg, for_command='tools')
+    if not token:
+        return 3
+    try:
+        status, data = request_json(f"{cfg['hub_url']}/v1/mcp", token=token,
+                                    payload={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})
+    except ConnectionError as exc:
+        print(f'FEHLER: Hub nicht erreichbar: {exc}', file=sys.stderr)
+        return 1
+    if status != 200 or not isinstance(data, dict):
+        print(f'FEHLER: tools/list nicht moeglich (HTTP {status}).', file=sys.stderr)
+        return 1
+    tools = (data.get('result') or {}).get('tools') or []
+    for tool in tools:
+        print(f"  {tool.get('name', '?'):40} {(tool.get('description') or '')[:70]}")
+    print(f'{len(tools)} Tools.')
+    return 0
+
+
+def mcp_server_config(cfg: dict, token: str) -> dict:
+    return {
+        'type': 'remote',
+        'url': f"{cfg['hub_url']}/v1/mcp",
+        'enabled': True,
+        'oauth': False,
+        'headers': {'Authorization': f'Bearer {token}'},
+    }
+
+
+def cmd_mcp_config(cfg: dict, args) -> int:
+    token = authenticated_token(cfg, for_command='mcp-config')
+    if not token:
+        return 3
+    config = {'mcp': {cfg['server_name']: mcp_server_config(cfg, token)}}
+    print(json.dumps(config, indent=2))
+    return 0
+
+
+def cmd_run(cfg: dict, args) -> int:
+    token = authenticated_token(cfg, for_command='run')
+    if not token:
+        return 3
+    # Verfuegbarkeit vorab pruefen (kein Blindstart).
+    try:
+        status, _ = request_json(f"{cfg['hub_url']}/v1/mcp", token=token,
+                                 payload={'jsonrpc': '2.0', 'id': 0, 'method': 'ping'})
+    except ConnectionError as exc:
+        print(f'FEHLER: Hub nicht erreichbar: {exc}', file=sys.stderr)
+        return 1
+    if status in (401,):
+        print('Token abgelaufen. Erneut: oc-codecompass login', file=sys.stderr)
+        return 3
+    if status == 403:
+        print('MCP-Exposure auf dem Hub deaktiviert.', file=sys.stderr)
+        return 4
+    # Bestehende OPENCODE_CONFIG_CONTENT zusammenfuehren, nicht ueberschreiben.
+    merged: dict = {}
+    raw = os.environ.get('OPENCODE_CONFIG_CONTENT', '').strip()
+    if raw:
+        try:
+            merged = json.loads(raw)
+            if not isinstance(merged, dict):
+                merged = {}
+        except ValueError:
+            print('Hinweis: ungueltige OPENCODE_CONFIG_CONTENT ignoriert.', file=sys.stderr)
+    mcp = merged.setdefault('mcp', {})
+    mcp[cfg['server_name']] = mcp_server_config(cfg, token)
+    env = dict(os.environ)
+    env['OPENCODE_CONFIG_CONTENT'] = json.dumps(merged)
+    argv = ['opencode', *args.opencode_args]
+    if args.model:
+        argv[1:1] = ['--model', args.model]
+    print(f'Starte OpenCode mit MCP-Server "{cfg["server_name"]}" -> {cfg["hub_url"]}/v1/mcp',
+          file=sys.stderr)
+    try:
+        os.execvpe(argv[0], argv, env)
+    except FileNotFoundError:
+        print('FEHLER: opencode nicht im PATH.', file=sys.stderr)
+        return 1
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog='oc-codecompass',
+                                     description='Ananta-Hub MCP (CodeCompass) an OpenCode anbinden')
+    sub = parser.add_subparsers(dest='cmd', required=True)
+    p_login = sub.add_parser('login', help='Am Hub anmelden und Token speichern')
+    p_login.add_argument('--username', '-u', default=None)
+    p_login.set_defaults(fn=cmd_login)
+    p_status = sub.add_parser('status', help='MCP-Endpunkt-Status anzeigen')
+    p_status.set_defaults(fn=cmd_status)
+    p_tools = sub.add_parser('tools', help='Verfuegbare Tools auflisten')
+    p_tools.set_defaults(fn=cmd_tools)
+    p_cfg = sub.add_parser('mcp-config', help='OpenCode-MCP-Konfiguration ausgeben')
+    p_cfg.set_defaults(fn=cmd_mcp_config)
+    p_run = sub.add_parser('run', help='OpenCode mit CodeCompass-MCP starten')
+    p_run.add_argument('--model', '-m', default=None, help='Modell PROVIDER/MODEL')
+    p_run.add_argument('opencode_args', nargs='*', help='Weitere Argumente fuer opencode')
+    p_run.set_defaults(fn=cmd_run)
+    args = parser.parse_args()
+    cfg = load_config()
+    return args.fn(cfg, args)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

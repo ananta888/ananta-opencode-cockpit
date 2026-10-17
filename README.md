@@ -17,6 +17,7 @@ no LLM calls from the tooling itself.**
 | `oc-side-sync/` | Inkrementelle Kontext-Synchronisation Haupt<->Side | `~/.local/bin/oc-side-sync` |
 | `slim-router/` | OpenCode-Plugins: Modell-Failback + Context Manager | `~/.config/opencode/plugins/` |
 | `slim-router/planctl.py` | Deterministische Arbeitsplan-Verwaltung (`slim-plan`) | `~/.local/bin/slim-plan` |
+| `oc-codecompass/` | Ananta-Hub-MCP (CodeCompass) an OpenCode anbinden | `~/.local/bin/oc-codecompass` |
 
 ## Installation
 
@@ -63,7 +64,8 @@ Obere Menueleiste (Mausklick) und rechtes Panel (Maus oder Tasten 1–7):
 | 4 | Plaene | `slim-plan brief` |
 | 5 | Kontext-Sync | Vorschau -> ausdrueckliche Bestaetigung -> Uebernahme |
 | 6 | Router | Konfiguration + Modell-Cooldowns |
-| 7 | Logs | Router-/Context-Logs (Auszug) |
+| 7 | CodeCompass | Hub-MCP-Status, Tools, OpenCode-Mit-CodeCompass-Start |
+| 8 | Logs | Router-/Context-Logs (Auszug) |
 
 Kritische Aktionen (Loeschen, Sync-Uebernahme) fragen ausdruecklich nach.
 `q` schliesst das Panel.
@@ -92,6 +94,32 @@ oc-side-sync apply   --main ses_A --side ses_B --direction main-to-side --yes
 - `apply` ohne `--yes` kontaktiert den Server nicht einmal.
 - Uebernahme erfolgt als `noReply`-Notiz (kein LLM-Aufruf); der Ziel-Cursor
   wird vor dem Senden gesperrt (kein doppeltes Uebertragen bei Timeout).
+
+## CodeCompass ueber den Ananta-Hub (oc-codecompass)
+
+```bash
+oc-codecompass login        # Hub-Login; Token+Refresh landen 0600 im State-Dir
+oc-codecompass status       # Exposure/Tool-Anzahl des /v1/mcp-Endpunkts
+oc-codecompass tools        # alle ueber MCP sichtbaren Tools
+oc-codecompass mcp-config   # OpenCode-MCP-Konfiguration als JSON
+oc-codecompass run --       # OpenCode mit injiziertem MCP-Server starten
+oc-side --codecompass ...   # Side-Chat gleich mit CodeCompass
+```
+
+- Der Hub stellt `/v1/mcp` als MCP-Endpunkt (JSON-RPC: initialize, ping,
+  tools/list, tools/call, resources). OpenCode verbindet sich als
+  `remote`-Server mit Bearer-Token.
+- Konfiguration: `~/.config/ananta-cockpit/codecompass.json`
+  (`hub_url` – nur 127.0.0.1/localhost zulaessig, `server_name`).
+- Access-Token (1 h) wird per rotierendem Refresh-Token automatisch erneuert.
+- **Voraussetzungen auf Hub-Seite** (Ananta-Projekt):
+  `exposure_policy.mcp.enabled=true` (plus `allow_user_auth`), und der
+  `/v1/mcp`-Handler muss den MCP-Handshake (`initialize`/`ping`/202 fuer
+  Notifications) beherrschen und **keine zusaetzlichen Felder wie `trace_id`
+  in JSON-RPC-Antworten** senden – sonst bricht OpenCodes StreamableHTTP-Client
+  ab und faellt auf SSE zurueck.
+- Sichtbare Tools richten sich nach der Operation-Policy des Hubs
+  (z. B. `codecompass.retrieve`, `architecture_overview`, `layers_plan`).
 
 ## Modell-Router (slim-router Plugin)
 
@@ -138,13 +166,20 @@ bash tests/run-tests.sh
    pruefen (keine wiederholten identischen Fallbacks in Endlosschleife).
 7. Fenstergroesse aendern – Panel und Statusleiste muessen bedienbar bleiben.
 8. `ananta-cockpit stop` – Layout und Optionen wiederhergestellt.
+9. `oc-codecompass login/status/tools` gegen den laufenden Hub.
+10. `oc-codecompass run -- mcp list` – der Server `ananta_codecompass` muss
+    `connected` zeigen.
+11. Menue 7 (CodeCompass) -> `t`: Tool-Liste erscheint.
 
 ## Verifiziert / nicht verifiziert
 
 - **Verifiziert im echten Verbund**: `ananta-cockpit start/stop/idempotent` in
   echtem tmux; alle Aktions-CLIs; Sync-Zyklus (init -> Vorschau -> bestaetigte
   Uebernahme -> Duplikatschutz) gegen einen echten `opencode serve`-Server auf
-  zwei realen Sitzungen, ohne LLM-Aufruf.
+  zwei realen Sitzungen, ohne LLM-Aufruf; CodeCompass-Anbindung gegen den
+  laufenden Ananta-Hub: `opencode mcp list` = connected und ein echter
+  `tools/call` auf `codecompass.retrieve` liefert Retrieval-Ergebnisse
+  (Budget-/Dedup-Diagnostik), ohne LLM-Aufruf.
 - **Nicht end-to-end getestet**: echte Mausklicks in einem angeklemmten Client
   (benötigt interaktives Terminal), Context-Compaction-Hook mit echtem
   `/compact`, Router-Failback gegen echte Providerfehler ausserhalb der bisher

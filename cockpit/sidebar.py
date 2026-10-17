@@ -14,7 +14,8 @@ ENTRIES = [
     ('4', 'Plaene', 'plans'),
     ('5', 'Kontext-Sync', 'sync'),
     ('6', 'Router', 'router'),
-    ('7', 'Logs', 'logs'),
+    ('7', 'CodeCompass', 'codecompass'),
+    ('8', 'Logs', 'logs'),
 ]
 
 
@@ -47,7 +48,7 @@ def app(screen):
 
         line(0, 'ANANTA CONTROL', curses.A_BOLD)
         line(1, 'tmux / OpenCode')
-        line(3, 'KLICKEN oder 1-7:')
+        line(3, 'KLICKEN oder 1-8:')
         for idx, (key, title, _) in enumerate(ENTRIES):
             line(5 + idx, f'[{key}] {title}', curses.A_REVERSE)
         line(13, f'Projekt: {project}')
